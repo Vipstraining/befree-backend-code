@@ -49,35 +49,65 @@ connectDB();
 app.use(helmet());
 
 // CORS configuration with debugging
-const corsOrigins = config.CORS_ORIGINS || [
-  'http://localhost:3000',
-  'http://localhost:3001',
-  'http://localhost:8000',
-  'http://localhost:8080',
-  'http://localhost:5000',
-  'http://localhost:4000',
-  'http://127.0.0.1:3000',
-  'http://127.0.0.1:3001',
-  'http://127.0.0.1:8000',
-  'http://127.0.0.1:8080',
-  'http://127.0.0.1:5000',
-  'http://127.0.0.1:4000',
-  'file://'
-];
+let corsOrigins = [];
 
-// Ensure production domains are included
+// Load CORS origins from config
+if (config.CORS_ORIGINS && Array.isArray(config.CORS_ORIGINS)) {
+  corsOrigins = [...config.CORS_ORIGINS];
+  logger.info('Loaded CORS origins from config', { origins: corsOrigins });
+} else {
+  // Fallback to default localhost origins
+  corsOrigins = [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://localhost:8000',
+    'http://localhost:8080',
+    'http://localhost:5000',
+    'http://localhost:4000',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:3001',
+    'http://127.0.0.1:8000',
+    'http://127.0.0.1:8080',
+    'http://127.0.0.1:5000',
+    'http://127.0.0.1:4000',
+    'file://'
+  ];
+  logger.warn('Using fallback CORS origins', { origins: corsOrigins });
+}
+
+// Always ensure production domains are included for production environment
 if (config.NODE_ENV === 'production') {
   const productionOrigins = [
     'https://beta.befree.fit',
     'https://api.befree.fit',
     'https://admin.befree.fit'
   ];
-  corsOrigins.push(...productionOrigins);
+  
+  // Add production origins if not already present
+  productionOrigins.forEach(origin => {
+    if (!corsOrigins.includes(origin)) {
+      corsOrigins.push(origin);
+    }
+  });
+  
+  logger.info('Added production CORS origins', { 
+    environment: config.NODE_ENV,
+    productionOrigins,
+    finalOrigins: corsOrigins 
+  });
+}
+
+// Additional safety: Always include beta.befree.fit for production
+if (config.NODE_ENV === 'production' && !corsOrigins.includes('https://beta.befree.fit')) {
+  corsOrigins.push('https://beta.befree.fit');
+  logger.warn('Force added beta.befree.fit to CORS origins', { finalOrigins: corsOrigins });
 }
 
 logger.info('CORS configuration', {
   allowedOrigins: corsOrigins,
-  environment: config.NODE_ENV
+  environment: config.NODE_ENV,
+  configCorsOrigins: config.CORS_ORIGINS,
+  configKeys: Object.keys(config)
 });
 
 app.use(cors({
