@@ -65,6 +65,16 @@ const corsOrigins = config.CORS_ORIGINS || [
   'file://'
 ];
 
+// Ensure production domains are included
+if (config.NODE_ENV === 'production') {
+  const productionOrigins = [
+    'https://beta.befree.fit',
+    'https://api.befree.fit',
+    'https://admin.befree.fit'
+  ];
+  corsOrigins.push(...productionOrigins);
+}
+
 logger.info('CORS configuration', {
   allowedOrigins: corsOrigins,
   environment: config.NODE_ENV
@@ -99,7 +109,12 @@ app.use(cors({
     'Accept',
     'Origin',
     'Access-Control-Request-Method',
-    'Access-Control-Request-Headers'
+    'Access-Control-Request-Headers',
+    'sec-ch-ua',
+    'sec-ch-ua-mobile',
+    'sec-ch-ua-platform',
+    'Referer',
+    'User-Agent'
   ],
   exposedHeaders: ['Authorization'],
   optionsSuccessStatus: 200 // Some legacy browsers (IE11, various SmartTVs) choke on 204
@@ -107,6 +122,9 @@ app.use(cors({
 
 // Handle CORS preflight requests
 app.options('*', cors());
+
+// Specific OPTIONS handler for auth routes
+app.options('/api/auth/*', cors());
 
 // Body parsing middleware
 app.use(express.json({ limit: config.MAX_FILE_SIZE || '10mb' }));
@@ -233,11 +251,11 @@ app.get('/api/test', (req, res) => {
   });
 });
 
-// API routes
-app.use('/api/auth', authRoutes);
-app.use('/api/profile', profileRoutes);
-app.use('/api/search', searchRoutes);
-app.use('/api/profile/health', healthRoutes);
+// API routes with CORS support
+app.use('/api/auth', cors(), authRoutes);
+app.use('/api/profile', cors(), profileRoutes);
+app.use('/api/search', cors(), searchRoutes);
+app.use('/api/profile/health', cors(), healthRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
