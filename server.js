@@ -103,11 +103,35 @@ if (config.NODE_ENV === 'production' && !corsOrigins.includes('https://beta.befr
   logger.warn('Force added beta.befree.fit to CORS origins', { finalOrigins: corsOrigins });
 }
 
+// EMERGENCY FIX: Always include production domains regardless of environment detection
+// This ensures CORS works even if environment detection fails
+const emergencyProductionOrigins = [
+  'https://beta.befree.fit',
+  'https://api.befree.fit',
+  'https://admin.befree.fit'
+];
+
+emergencyProductionOrigins.forEach(origin => {
+  if (!corsOrigins.includes(origin)) {
+    corsOrigins.push(origin);
+    logger.warn(`Emergency: Added ${origin} to CORS origins`, { finalOrigins: corsOrigins });
+  }
+});
+
 logger.info('CORS configuration', {
   allowedOrigins: corsOrigins,
   environment: config.NODE_ENV,
+  processEnvNodeEnv: process.env.NODE_ENV,
   configCorsOrigins: config.CORS_ORIGINS,
   configKeys: Object.keys(config)
+});
+
+// Debug: Log environment detection
+logger.warn('Environment Debug', {
+  'process.env.NODE_ENV': process.env.NODE_ENV,
+  'config.NODE_ENV': config.NODE_ENV,
+  'corsOrigins.length': corsOrigins.length,
+  'corsOrigins': corsOrigins
 });
 
 app.use(cors({
