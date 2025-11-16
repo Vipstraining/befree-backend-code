@@ -253,7 +253,14 @@ app.use((req, res, next) => {
 
 // Rate limiting
 app.use('/api/', apiLimiter);
-app.use('/api/auth/', authLimiter);
+// Auth routes - stricter rate limiting (register has its own limiter in routes file)
+app.use('/api/auth/', (req, res, next) => {
+  // Skip rate limiting for register route (it has its own limiter)
+  if (req.path === '/register') {
+    return next();
+  }
+  return authLimiter(req, res, next);
+});
 app.use('/api/search/', searchLimiter);
 
 // Health check endpoint

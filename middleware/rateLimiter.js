@@ -12,13 +12,25 @@ const apiLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Authentication rate limiter (more restrictive)
+// Authentication rate limiter (more restrictive for login)
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // limit each IP to 5 requests per windowMs
+  max: parseInt(process.env.AUTH_RATE_LIMIT_MAX) || 10, // limit each IP to 10 requests per windowMs
   message: {
     success: false,
     message: 'Too many authentication attempts, please try again later.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Registration rate limiter (more lenient for new user signups)
+const registerLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: parseInt(process.env.REGISTER_RATE_LIMIT_MAX) || 20, // limit each IP to 20 requests per windowMs
+  message: {
+    success: false,
+    message: 'Too many registration attempts, please try again later.'
   },
   standardHeaders: true,
   legacyHeaders: false,
@@ -39,5 +51,6 @@ const searchLimiter = rateLimit({
 module.exports = {
   apiLimiter,
   authLimiter,
+  registerLimiter,
   searchLimiter
 };

@@ -2,6 +2,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const User = require('../models/User');
+const { registerLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
 
@@ -15,7 +16,7 @@ const generateToken = (id) => {
 // @route   POST /api/auth/register
 // @desc    Register user
 // @access  Public
-router.post('/register', [
+router.post('/register', registerLimiter, [
   body('username')
     .isLength({ min: 3, max: 30 })
     .withMessage('Username must be between 3 and 30 characters')
