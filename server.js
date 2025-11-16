@@ -56,22 +56,24 @@ if (config.CORS_ORIGINS && Array.isArray(config.CORS_ORIGINS)) {
   corsOrigins = [...config.CORS_ORIGINS];
   logger.info('Loaded CORS origins from config', { origins: corsOrigins });
 } else {
-  // Fallback to default localhost origins
-  corsOrigins = [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'http://localhost:8000',
-    'http://localhost:8080',
-    'http://localhost:5000',
-    'http://localhost:4000',
-    'http://127.0.0.1:3000',
-    'http://127.0.0.1:3001',
-    'http://127.0.0.1:8000',
-    'http://127.0.0.1:8080',
-    'http://127.0.0.1:5000',
-    'http://127.0.0.1:4000',
-    'file://'
-  ];
+      // Fallback to default localhost origins
+      corsOrigins = [
+        'http://localhost:3000',
+        'http://localhost:3001',
+        'http://localhost:8000',
+        'http://localhost:8001',
+        'http://localhost:8080',
+        'http://localhost:5000',
+        'http://localhost:4000',
+        'http://127.0.0.1:3000',
+        'http://127.0.0.1:3001',
+        'http://127.0.0.1:8000',
+        'http://127.0.0.1:8001',
+        'http://127.0.0.1:8080',
+        'http://127.0.0.1:5000',
+        'http://127.0.0.1:4000',
+        'file://'
+      ];
   logger.warn('Using fallback CORS origins', { origins: corsOrigins });
 }
 

@@ -291,3 +291,4 @@ HealthProfileSchema.index({ 'allergies.food.allergen': 1 });
 
 module.exports = mongoose.model('HealthProfile', HealthProfileSchema);
 
+
