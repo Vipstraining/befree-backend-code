@@ -18,8 +18,9 @@ const generateToken = (id) => {
 // @access  Public
 router.post('/register', registerLimiter, [
   body('username')
-    .isLength({ min: 3, max: 30 })
-    .withMessage('Username must be between 3 and 30 characters')
+    .optional()
+    .isLength({ min: 3, max: 22 })
+    .withMessage('Username base must be between 3 and 22 characters (timestamp will be appended)')
     .matches(/^[a-zA-Z0-9_]+$/)
     .withMessage('Username can only contain letters, numbers, and underscores'),
   body('email')
@@ -40,7 +41,7 @@ router.post('/register', registerLimiter, [
       });
     }
 
-    const { username, email, password } = req.body;
+    let { username, email, password, name } = req.body;
 
     // Check if user already exists (only email needs to be unique)
     const existingUser = await User.findOne({ email });
@@ -50,6 +51,48 @@ router.post('/register', registerLimiter, [
         success: false,
         message: 'User already exists with this email'
       });
+    }
+
+    // Generate username from name and email if username is not provided
+    if (!username) {
+      const namePart = name ? name.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '') : '';
+      const emailPart = email.split('@')[0].toLowerCase().replace(/[^a-zA-Z0-9_]/g, '');
+      
+      // Generate base username from name and email
+      username = namePart ? `${namePart}_${emailPart}` : emailPart;
+    }
+
+    // Always append timestamp to username to ensure uniqueness
+    // Use last 8 digits of timestamp for uniqueness
+    const timestamp = Date.now().toString().slice(-8);
+    const baseUsername = username.replace(/[^a-zA-Z0-9_]/g, '').substring(0, 22); // Leave room for timestamp
+    username = `${baseUsername}_${timestamp}`;
+
+    // Ensure username doesn't exceed max length (30 chars)
+    if (username.length > 30) {
+      username = username.substring(0, 30);
+    }
+
+    // Validate final username meets requirements
+    if (username.length < 3) {
+      return res.status(400).json({
+        success: false,
+        message: 'Generated username is too short'
+      });
+    }
+
+    // Check if generated username already exists (unlikely but possible)
+    let usernameExists = await User.findOne({ username });
+    let attempts = 0;
+    const originalUsername = username;
+    
+    while (usernameExists && attempts < 5) {
+      // If username exists, append additional random digits
+      const additionalDigits = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+      const base = originalUsername.substring(0, 27); // Leave room for additional digits
+      username = `${base}_${additionalDigits}`;
+      usernameExists = await User.findOne({ username });
+      attempts++;
     }
 
     // Create user
