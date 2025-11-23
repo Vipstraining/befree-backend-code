@@ -127,37 +127,40 @@ router.post('/register', registerLimiter, [
 // @route   POST /api/auth/login
 // @desc    Login user
 // @access  Public
-router.post('/login', [
-  body('email')
-    .isEmail()
-    .normalizeEmail()
-    .withMessage('Please provide a valid email'),
-  body('password')
-    .notEmpty()
-    .withMessage('Password is required')
-], async (req, res) => {
+router.post('/login', async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
+    const { email, password } = req.body;
+
+    // Priority 1: Validate email format first (don't check password if email is invalid)
+    if (!email) {
       return res.status(400).json({
         success: false,
-        message: 'Validation failed',
-        errors: errors.array()
+        message: 'Email is invalid'
       });
     }
 
-    const { email, password } = req.body;
+    // Validate email format using regex
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is invalid'
+      });
+    }
 
-    // Check if user exists
-    const user = await User.findOne({ email }).select('+password');
+    // Normalize email (lowercase)
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Priority 2: Check if user exists (email is valid at this point)
+    const user = await User.findOne({ email: normalizedEmail }).select('+password');
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid credentials'
+        message: 'No account found with this email'
       });
     }
 
-    // Check if user is active
+    // Priority 3: Check if user is active
     if (!user.isActive) {
       return res.status(401).json({
         success: false,
@@ -165,12 +168,20 @@ router.post('/login', [
       });
     }
 
-    // Check password
+    // Priority 4: Validate password is provided
+    if (!password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password is required'
+      });
+    }
+
+    // Priority 5: Check password (email is valid and user exists)
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid credentials'
+        message: 'Email is valid and password is invalid'
       });
     }
 
