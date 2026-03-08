@@ -189,27 +189,55 @@ app.use(express.urlencoded({ extended: true, limit: config.MAX_FILE_SIZE || '10m
 // Trust proxy (for rate limiting behind reverse proxy)
 app.set('trust proxy', 1);
 
-// Request logging middleware
+// Request logging middleware with detailed logging
 app.use((req, res, next) => {
   const start = Date.now();
+  const requestId = `${Date.now()}-${Math.random().toString(36).substring(7)}`;
   
-  // Log detailed request
-  logger.debug('Incoming request', {
+  // Attach request ID for tracking
+  req.requestId = requestId;
+  
+  // Sanitize request body (remove sensitive data for logging)
+  const sanitizeBody = (body) => {
+    if (!body) return undefined;
+    const sanitized = { ...body };
+    
+    // Redact sensitive fields
+    const sensitiveFields = ['password', 'token', 'secret', 'apiKey', 'creditCard', 'ssn'];
+    sensitiveFields.forEach(field => {
+      if (sanitized[field]) {
+        sanitized[field] = '[REDACTED]';
+      }
+    });
+    
+    return sanitized;
+  };
+  
+  // Log detailed incoming request
+  logger.info('📥 INCOMING REQUEST', {
+    requestId,
+    timestamp: new Date().toISOString(),
     method: req.method,
     url: req.url,
+    path: req.path,
     query: req.query,
     params: req.params,
     headers: {
       'content-type': req.get('Content-Type'),
-      'authorization': req.get('Authorization') ? 'Bearer [REDACTED]' : 'none',
+      'content-length': req.get('Content-Length'),
+      'authorization': req.get('Authorization') ? 'Bearer [TOKEN_PRESENT]' : 'none',
       'origin': req.get('Origin'),
       'referer': req.get('Referer'),
       'user-agent': req.get('User-Agent'),
-      'accept': req.get('Accept')
+      'accept': req.get('Accept'),
+      'host': req.get('Host'),
+      'connection': req.get('Connection')
     },
-    ip: req.ip,
-    userAgent: req.get('User-Agent'),
-    body: req.method !== 'GET' ? req.body : undefined
+    body: req.method !== 'GET' ? sanitizeBody(req.body) : undefined,
+    ip: req.ip || req.connection.remoteAddress,
+    protocol: req.protocol,
+    secure: req.secure,
+    xhr: req.xhr
   });
   
   // Capture response body
@@ -232,18 +260,52 @@ app.use((req, res, next) => {
   res.end = function(chunk, encoding) {
     const duration = Date.now() - start;
     
+    // Parse response body if it's a string
+    let parsedResponseBody = responseBody;
+    if (typeof responseBody === 'string') {
+      try {
+        parsedResponseBody = JSON.parse(responseBody);
+      } catch (e) {
+        parsedResponseBody = responseBody;
+      }
+    }
+    
+    // Determine log level based on status code
+    const logLevel = res.statusCode >= 500 ? 'error' : 
+                     res.statusCode >= 400 ? 'warn' : 'info';
+    
     // Log detailed response
-    logger.info('Request completed', {
+    const responseLog = {
+      requestId,
+      timestamp: new Date().toISOString(),
       method: req.method,
       url: req.url,
+      path: req.path,
       statusCode: res.statusCode,
+      statusMessage: res.statusMessage,
       responseTime: `${duration}ms`,
-      responseSize: responseBody ? JSON.stringify(responseBody).length : 0,
-      responseBody: responseBody,
-      origin: req.get('Origin'),
-      userAgent: req.get('User-Agent'),
-      ip: req.ip
-    });
+      responseSize: responseBody ? JSON.stringify(responseBody).length : (chunk ? chunk.length : 0),
+      responseHeaders: {
+        'content-type': res.get('Content-Type'),
+        'content-length': res.get('Content-Length')
+      },
+      responseBody: parsedResponseBody,
+      userId: req.user ? req.user.id : undefined,
+      ip: req.ip || req.connection.remoteAddress,
+      userAgent: req.get('User-Agent')
+    };
+    
+    logger[logLevel]('📤 OUTGOING RESPONSE', responseLog);
+    
+    // Performance warning for slow requests
+    if (duration > 1000) {
+      logger.warn('⚠️  SLOW REQUEST DETECTED', {
+        requestId,
+        url: req.url,
+        duration: `${duration}ms`,
+        threshold: '1000ms'
+      });
+    }
     
     originalEnd.call(this, chunk, encoding);
   };

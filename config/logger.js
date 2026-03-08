@@ -45,6 +45,14 @@ const createLogger = () => {
   // Format log message
   const formatMessage = (level, message, meta = {}) => {
     const timestamp = formatTimestamp();
+    
+    // Pretty print for detailed request/response logs
+    if (message.includes('REQUEST') || message.includes('RESPONSE')) {
+      const metaStr = Object.keys(meta).length ? `\n${JSON.stringify(meta, null, 2)}` : '';
+      return `[${timestamp}] [${level.toUpperCase()}] ${message}${metaStr}`;
+    }
+    
+    // Standard format for other logs
     const metaStr = Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : '';
     return `[${timestamp}] [${level.toUpperCase()}] ${message}${metaStr}`;
   };
