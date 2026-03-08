@@ -2,19 +2,23 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const User = require('../models/User');
+const Session = require('../models/Session');
 const { registerLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
 
-// Generate JWT Token
-const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRE || '7d',
-  });
+// JWT carries userId + sessionId — 30d so the token itself never expires
+// before the rolling session does (session DB is the real gate)
+const generateToken = (userId, sessionId) => {
+  return jwt.sign(
+    { id: userId, sessionId },
+    process.env.JWT_SECRET || 'dev_jwt_secret_key_change_in_production',
+    { expiresIn: '30d' }
+  );
 };
 
 // @route   POST /api/auth/register
-// @desc    Register user
+// @desc    Register user and create a new session
 // @access  Public
 router.post('/register', registerLimiter, [
   body('username')
@@ -29,7 +33,12 @@ router.post('/register', registerLimiter, [
     .withMessage('Please provide a valid email'),
   body('password')
     .isLength({ min: 6 })
-    .withMessage('Password must be at least 6 characters long')
+    .withMessage('Password must be at least 6 characters long'),
+  body('deviceId')
+    .notEmpty()
+    .withMessage('deviceId is required')
+    .isLength({ min: 1, max: 200 })
+    .withMessage('deviceId must be between 1 and 200 characters')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -41,11 +50,10 @@ router.post('/register', registerLimiter, [
       });
     }
 
-    let { username, email, password, name } = req.body;
+    let { username, email, password, name, deviceId } = req.body;
 
-    // Check if user already exists (only email needs to be unique)
+    // Check if user already exists
     const existingUser = await User.findOne({ email });
-
     if (existingUser) {
       return res.status(400).json({
         success: false,
@@ -53,27 +61,22 @@ router.post('/register', registerLimiter, [
       });
     }
 
-    // Generate username from name and email if username is not provided
+    // Generate username from name and email if not provided
     if (!username) {
       const namePart = name ? name.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '') : '';
       const emailPart = email.split('@')[0].toLowerCase().replace(/[^a-zA-Z0-9_]/g, '');
-      
-      // Generate base username from name and email
       username = namePart ? `${namePart}_${emailPart}` : emailPart;
     }
 
-    // Always append timestamp to username to ensure uniqueness
-    // Use last 8 digits of timestamp for uniqueness
+    // Always append timestamp suffix to ensure uniqueness
     const timestamp = Date.now().toString().slice(-8);
-    const baseUsername = username.replace(/[^a-zA-Z0-9_]/g, '').substring(0, 22); // Leave room for timestamp
+    const baseUsername = username.replace(/[^a-zA-Z0-9_]/g, '').substring(0, 22);
     username = `${baseUsername}_${timestamp}`;
 
-    // Ensure username doesn't exceed max length (30 chars)
     if (username.length > 30) {
       username = username.substring(0, 30);
     }
 
-    // Validate final username meets requirements
     if (username.length < 3) {
       return res.status(400).json({
         success: false,
@@ -81,28 +84,31 @@ router.post('/register', registerLimiter, [
       });
     }
 
-    // Check if generated username already exists (unlikely but possible)
+    // Resolve username collision (rare due to timestamp suffix)
     let usernameExists = await User.findOne({ username });
     let attempts = 0;
     const originalUsername = username;
-    
+
     while (usernameExists && attempts < 5) {
-      // If username exists, append additional random digits
       const additionalDigits = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
-      const base = originalUsername.substring(0, 27); // Leave room for additional digits
+      const base = originalUsername.substring(0, 27);
       username = `${base}_${additionalDigits}`;
       usernameExists = await User.findOne({ username });
       attempts++;
     }
 
     // Create user
-    const user = await User.create({
-      username,
-      email,
-      password
+    const user = await User.create({ username, email, password });
+
+    // Create session for this device
+    const session = await Session.create({
+      userId: user._id,
+      username: user.username,
+      deviceId,
+      expiresAt: Session.newExpiresAt()
     });
 
-    const token = generateToken(user._id);
+    const token = generateToken(user._id, session._id);
 
     res.status(201).json({
       success: true,
@@ -112,6 +118,12 @@ router.post('/register', registerLimiter, [
         id: user._id,
         username: user.username,
         email: user.email
+      },
+      session: {
+        id: session._id,
+        deviceId: session.deviceId,
+        expiresAt: session.expiresAt,
+        isResumed: false
       }
     });
 
@@ -125,13 +137,13 @@ router.post('/register', registerLimiter, [
 });
 
 // @route   POST /api/auth/login
-// @desc    Login user
+// @desc    Login user — creates new session or resumes existing one for same device
 // @access  Public
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, deviceId } = req.body;
 
-    // Priority 1: Validate email format first (don't check password if email is invalid)
+    // Validate email format first
     if (!email) {
       return res.status(400).json({
         success: false,
@@ -139,7 +151,6 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Validate email format using regex
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return res.status(400).json({
@@ -148,10 +159,17 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Normalize email (lowercase)
+    // deviceId is required
+    if (!deviceId) {
+      return res.status(400).json({
+        success: false,
+        message: 'deviceId is required'
+      });
+    }
+
     const normalizedEmail = email.toLowerCase().trim();
 
-    // Priority 2: Check if user exists (email is valid at this point)
+    // Check user exists
     const user = await User.findOne({ email: normalizedEmail }).select('+password');
     if (!user) {
       return res.status(401).json({
@@ -160,7 +178,7 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Priority 3: Check if user is active
+    // Check account active
     if (!user.isActive) {
       return res.status(401).json({
         success: false,
@@ -168,7 +186,7 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Priority 4: Validate password is provided
+    // Check password provided
     if (!password) {
       return res.status(400).json({
         success: false,
@@ -176,7 +194,7 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Priority 5: Check password (email is valid and user exists)
+    // Verify password
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
       return res.status(401).json({
@@ -185,21 +203,54 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Update last login
+    // Update last login timestamp
     user.lastLogin = new Date();
     await user.save();
 
-    const token = generateToken(user._id);
+    // --- Session management ---
+    const now = new Date();
+    let session = await Session.findOne({ userId: user._id, deviceId });
+    let isResumed = false;
+
+    if (session && session.isActive && session.expiresAt > now) {
+      // Same device, valid session — resume and extend by 120 hours
+      session.expiresAt = Session.newExpiresAt();
+      session.lastAccessedAt = now;
+      await session.save();
+      isResumed = true;
+    } else if (session) {
+      // Same device but session expired or was terminated — reactivate
+      session.isActive = true;
+      session.expiresAt = Session.newExpiresAt();
+      session.lastAccessedAt = now;
+      await session.save();
+    } else {
+      // New device — create a fresh session
+      session = await Session.create({
+        userId: user._id,
+        username: user.username,
+        deviceId,
+        expiresAt: Session.newExpiresAt()
+      });
+    }
+
+    const token = generateToken(user._id, session._id);
 
     res.json({
       success: true,
-      message: 'Login successful',
+      message: isResumed ? 'Session resumed successfully' : 'Login successful',
       token,
       user: {
         id: user._id,
         username: user.username,
         email: user.email,
         lastLogin: user.lastLogin
+      },
+      session: {
+        id: session._id,
+        deviceId: session.deviceId,
+        expiresAt: session.expiresAt,
+        isResumed
       }
     });
 
