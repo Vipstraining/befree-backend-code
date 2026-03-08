@@ -22,12 +22,6 @@ const generateToken = (userId, sessionId) => {
 // @desc    Register user and create a new session
 // @access  Public
 router.post('/register', registerLimiter, [
-  body('username')
-    .optional()
-    .isLength({ min: 3, max: 22 })
-    .withMessage('Username base must be between 3 and 22 characters (timestamp will be appended)')
-    .matches(/^[a-zA-Z0-9_]+$/)
-    .withMessage('Username can only contain letters, numbers, and underscores'),
   body('email')
     .isEmail()
     .withMessage('Please provide a valid email'),
@@ -39,6 +33,18 @@ router.post('/register', registerLimiter, [
     .withMessage('deviceId is required')
     .isLength({ min: 1, max: 200 })
     .withMessage('deviceId must be between 1 and 200 characters'),
+  body('firstName')
+    .notEmpty()
+    .withMessage('First name is required')
+    .trim()
+    .isLength({ min: 1, max: 50 })
+    .withMessage('First name must be between 1 and 50 characters'),
+  body('lastName')
+    .notEmpty()
+    .withMessage('Last name is required')
+    .trim()
+    .isLength({ min: 1, max: 50 })
+    .withMessage('Last name must be between 1 and 50 characters'),
   body('mobile')
     .optional()
     .trim()
@@ -49,6 +55,7 @@ router.post('/register', registerLimiter, [
     logger.info('🔐 REGISTRATION ATTEMPT', {
       email: req.body.email,
       firstName: req.body.firstName,
+      lastName: req.body.lastName,
       deviceId: req.body.deviceId,
       hasMobile: !!req.body.mobile,
       ip: req.ip,
@@ -70,7 +77,7 @@ router.post('/register', registerLimiter, [
       });
     }
 
-    let { username, email, password, firstName, mobile, deviceId } = req.body;
+    const { email, password, firstName, lastName, mobile, deviceId } = req.body;
 
     // Keep email as-is without normalization
     const emailToStore = email.trim();
@@ -92,23 +99,12 @@ router.post('/register', registerLimiter, [
       });
     }
 
-    // Generate username from firstName and timestamp
-    if (!username) {
-      if (!firstName || firstName.trim() === '') {
-        return res.status(400).json({
-          success: false,
-          message: 'firstName is required to generate username'
-        });
-      }
-      const firstNamePart = firstName.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
-      username = firstNamePart;
-    }
-
-    // Always append timestamp suffix to ensure uniqueness
+    // Auto-generate username from firstName + random timestamp
+    const firstNamePart = firstName.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
     const timestamp = Date.now().toString().slice(-8);
-    const baseUsername = username.replace(/[^a-zA-Z0-9_]/g, '').substring(0, 22);
-    username = `${baseUsername}_${timestamp}`;
+    let username = `${firstNamePart}_${timestamp}`;
 
+    // Ensure username is within length limits
     if (username.length > 30) {
       username = username.substring(0, 30);
     }
@@ -116,7 +112,7 @@ router.post('/register', registerLimiter, [
     if (username.length < 3) {
       return res.status(400).json({
         success: false,
-        message: 'Generated username is too short'
+        message: 'Generated username is too short. Please use a longer first name.'
       });
     }
 
@@ -133,12 +129,13 @@ router.post('/register', registerLimiter, [
       attempts++;
     }
 
-    // Prepare user data - mobile can be blank/empty
+    // Prepare user data
     const userData = { 
       username, 
       email: emailToStore, 
       password,
-      firstName: firstName || '',
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
       mobile: mobile || ''
     };
 
@@ -150,6 +147,7 @@ router.post('/register', registerLimiter, [
       username: user.username,
       email: user.email,
       firstName: user.firstName,
+      lastName: user.lastName,
       hasMobile: !!user.mobile
     });
 

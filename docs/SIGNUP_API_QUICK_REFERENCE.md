@@ -13,6 +13,7 @@ Content-Type: application/json
   "password": "yourPassword",
   "deviceId": "device-uuid-123",
   "firstName": "John",
+  "lastName": "Doe",
   "mobile": "+1234567890"
 }
 ```
@@ -24,9 +25,9 @@ Content-Type: application/json
 | `email` | ✅ Yes | String | Stored as-is (case preserved) |
 | `password` | ✅ Yes | String | Min 6 chars |
 | `deviceId` | ✅ Yes | String | 1-200 chars |
-| `firstName` | ⚠️ If no username | String | For username generation |
+| `firstName` | ✅ Yes | String | 1-50 chars, used for auto-generated username |
+| `lastName` | ✅ Yes | String | 1-50 chars |
 | `mobile` | ❌ No | String | Can be blank/empty |
-| `username` | ❌ No | String | Custom username (timestamp appended) |
 
 ## ✅ Success Response (201)
 
@@ -91,14 +92,14 @@ Content-Type: application/json
 - Can login with: `user@example.com` or `USER@EXAMPLE.COM`
 
 ### Username Generation
-- **Auto-generated**: `firstName` + `_` + `timestamp`
-- **Custom username**: `username` + `_` + `timestamp`
+- **Auto-generated**: `firstName` + `_` + `random_timestamp`
 - **Final length**: Max 30 characters
+- **No custom usernames allowed**
 
 **Examples:**
 - `firstName="John"` → `john_17098765`
 - `firstName="Mary Jane"` → `mary_jane_17098766`
-- `username="dev_user"` → `dev_user_17098767`
+- `firstName="José"` → `jos_17098767`
 
 ### Mobile Field
 - Optional field
@@ -113,7 +114,8 @@ Frontend must send:
 - ✅ `email` - User's email address
 - ✅ `password` - User's password (min 6 chars)
 - ✅ `deviceId` - Unique device identifier
-- ✅ `firstName` - User's first name (if username not provided)
+- ✅ `firstName` - User's first name (1-50 chars)
+- ✅ `lastName` - User's last name (1-50 chars)
 - ⚪ `mobile` - User's phone number (optional)
 
 Frontend should:

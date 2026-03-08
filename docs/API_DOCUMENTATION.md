@@ -279,19 +279,19 @@ Register a new user. Automatically creates a session for the device.
   "password": "mypassword",
   "deviceId": "device-uuid-abc123",
   "firstName": "John",
-  "mobile": "+1234567890",
-  "username": "optional_username"
+  "lastName": "Doe",
+  "mobile": "+1234567890"
 }
 ```
 
 | Field | Required | Rules |
 |-------|----------|-------|
-| `email` | Yes | Valid email, must be unique. **Email is stored exactly as submitted** (not normalized or lowercased). Case-sensitive storage. |
+| `email` | Yes | Valid email, must be unique. **Email is stored exactly as submitted** (not normalized or lowercased). |
 | `password` | Yes | Minimum 6 characters |
 | `deviceId` | Yes | 1–200 chars, stable device identifier (UUID, device fingerprint, etc.) |
-| `firstName` | Required if `username` not provided | Used to auto-generate `username` if `username` is omitted. Whitespace and special chars are stripped. |
+| `firstName` | Yes | 1-50 chars. Used to auto-generate username. Whitespace and special chars are stripped for username. |
+| `lastName` | Yes | 1-50 chars. User's last name. |
 | `mobile` | No | Phone number. **Can be blank/empty string or omitted entirely.** Stored as-is in database. |
-| `username` | No | 3–22 chars, alphanumeric + underscore. A `_TIMESTAMP` suffix is always appended to guarantee uniqueness. |
 
 #### Important Notes
 
@@ -300,15 +300,15 @@ Register a new user. Automatically creates a session for the device.
   - Omitted from the request body entirely
   - Sent as an empty string `""`
   - Sent with a valid phone number
-- **Username Uniqueness**: All usernames automatically get an 8-digit timestamp suffix (`_12345678`) to ensure uniqueness.
+- **Username Auto-Generation**: Username is automatically generated from firstName + random timestamp. Users cannot provide custom usernames.
 
 #### Username Generation Rules
 
-If `username` is not provided, it is auto-generated from `firstName`:
+Username is **automatically generated** from `firstName` + random timestamp:
 1. `firstName` is converted to lowercase
 2. Spaces are replaced with underscores
 3. Special characters are removed (only alphanumeric and underscore allowed)
-4. Timestamp suffix is appended (`_XXXXXXXX`)
+4. Random 8-digit timestamp suffix is appended (`_XXXXXXXX`)
 5. Final username is capped at 30 characters
 
 **Examples:**
@@ -316,8 +316,7 @@ If `username` is not provided, it is auto-generated from `firstName`:
 - `firstName="Mary Jane"` → `mary_jane_12345678`
 - `firstName="José"` → `jos_12345678`
 
-If `username` is provided:
-- `username="custom_user"` → `custom_user_12345678`
+**Note**: Username field is NOT accepted in the request body. It is always auto-generated.
 
 #### Success Response `201`
 
@@ -405,6 +404,7 @@ curl -X POST http://localhost:3000/api/auth/register \
     "password": "securePass123",
     "deviceId": "550e8400-e29b-41d4-a716-446655440000",
     "firstName": "Sarah",
+    "lastName": "Johnson",
     "mobile": "+1-555-123-4567"
   }'
 ```
@@ -429,7 +429,7 @@ Response:
 }
 ```
 
-**Example 2: Registration without mobile (blank mobile)**
+**Example 2: Registration without mobile**
 ```bash
 curl -X POST http://localhost:3000/api/auth/register \
   -H "Content-Type: application/json" \
@@ -438,7 +438,7 @@ curl -X POST http://localhost:3000/api/auth/register \
     "password": "myPassword456",
     "deviceId": "device-abc-123",
     "firstName": "John",
-    "mobile": ""
+    "lastName": "Doe"
   }'
 ```
 
@@ -462,7 +462,7 @@ Response:
 }
 ```
 
-**Example 3: Registration with custom username**
+**Example 3: Registration with blank mobile**
 ```bash
 curl -X POST http://localhost:3000/api/auth/register \
   -H "Content-Type: application/json" \
@@ -471,7 +471,8 @@ curl -X POST http://localhost:3000/api/auth/register \
     "password": "strongPass789",
     "deviceId": "mobile-device-xyz",
     "firstName": "Alex",
-    "username": "alex_dev"
+    "lastName": "Martinez",
+    "mobile": ""
   }'
 ```
 
@@ -483,7 +484,7 @@ Response:
   "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
   "user": {
     "id": "65ghi789jkl012",
-    "username": "alex_dev_17098767",
+    "username": "alex_17098767",
     "email": "alex@startup.io"
   },
   "session": {
@@ -503,7 +504,8 @@ Registering with `User@Example.com`:
   "email": "User@Example.com",
   "password": "pass123",
   "deviceId": "device-1",
-  "firstName": "Test"
+  "firstName": "Test",
+  "lastName": "User"
 }
 ```
 ✅ Stored as: `User@Example.com`
@@ -514,10 +516,11 @@ Later, trying to register with `user@example.com`:
   "email": "user@example.com",
   "password": "pass456",
   "deviceId": "device-2",
-  "firstName": "Test2"
+  "firstName": "Test",
+  "lastName": "User2"
 }
 ```
-❌ Error: Email already exists (because the exact match is found)
+❌ Error: Email already exists (case-insensitive duplicate check)
 
 **Note**: While emails are stored as-is, the uniqueness check is case-insensitive to prevent duplicate accounts with different casing.
 

@@ -109,9 +109,10 @@ A comprehensive Node.js backend API for a food catalog application that provides
 ## Database Schema
 
 ### Users Collection
-- `username` (String, unique, required, auto-generated with timestamp)
+- `username` (String, unique, required, auto-generated from firstName + timestamp)
 - `email` (String, unique, required, stored as-is)
-- `firstName` (String, used for username generation)
+- `firstName` (String, required, 1-50 chars)
+- `lastName` (String, required, 1-50 chars)
 - `mobile` (String, optional, can be blank)
 - `password` (String, hashed with bcrypt, required)
 - `isActive` (Boolean, default: true)
@@ -229,6 +230,7 @@ curl -X POST http://localhost:3000/api/auth/register \
     "password": "SecurePass123",
     "deviceId": "device-uuid-123",
     "firstName": "John",
+    "lastName": "Doe",
     "mobile": "+1-555-123-4567"
   }'
 ```
@@ -255,7 +257,8 @@ curl -X POST http://localhost:3000/api/auth/register \
 
 **Key Points:**
 - Email is stored exactly as submitted (preserves casing)
-- Username is auto-generated from `firstName` + timestamp (e.g., `john_17098765`)
+- Username is auto-generated from `firstName` + random timestamp (e.g., `john_17098765`)
+- Both `firstName` and `lastName` are required
 - `mobile` field is optional and can be blank or omitted
 - `deviceId` is required for session management
 - Session expires after 120 hours of inactivity (rolling expiration)
