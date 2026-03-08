@@ -29,6 +29,10 @@ const SessionSchema = new mongoose.Schema({
   lastAccessedAt: {
     type: Date,
     default: Date.now
+  },
+  lastUsedAt: {
+    type: Date,
+    default: Date.now
   }
 }, {
   timestamps: true

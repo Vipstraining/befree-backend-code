@@ -4,6 +4,7 @@ const { body, validationResult } = require('express-validator');
 const User = require('../models/User');
 const Session = require('../models/Session');
 const { registerLimiter } = require('../middleware/rateLimiter');
+const auth = require('../middleware/auth');
 const logger = require('../config/logger');
 
 const router = express.Router();
@@ -24,7 +25,9 @@ const generateToken = (userId, sessionId) => {
 router.post('/register', registerLimiter, [
   body('email')
     .isEmail()
-    .withMessage('Please provide a valid email'),
+    .withMessage('Please provide a valid email')
+    .trim()
+    .normalizeEmail({ all_lowercase: true, gmail_remove_dots: false }),
   body('password')
     .isLength({ min: 6 })
     .withMessage('Password must be at least 6 characters long'),
@@ -48,9 +51,11 @@ router.post('/register', registerLimiter, [
   body('mobile')
     .optional()
     .trim()
+    .isLength({ max: 20 })
+    .withMessage('Mobile must not exceed 20 characters')
 ], async (req, res) => {
   const registrationStartTime = Date.now();
-  
+
   try {
     logger.info('🔐 REGISTRATION ATTEMPT', {
       email: req.body.email,
@@ -61,7 +66,7 @@ router.post('/register', registerLimiter, [
       ip: req.ip,
       userAgent: req.get('User-Agent')
     });
-    
+
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       logger.warn('❌ REGISTRATION VALIDATION FAILED', {
@@ -69,30 +74,29 @@ router.post('/register', registerLimiter, [
         errors: errors.array(),
         ip: req.ip
       });
-      
+
       return res.status(400).json({
         success: false,
         message: 'Validation failed',
-        errors: errors.array()
+        errors: errors.array().map(e => ({ field: e.path || e.param, message: e.msg }))
       });
     }
 
     const { email, password, firstName, lastName, mobile, deviceId } = req.body;
 
-    // Keep email as-is without normalization
-    const emailToStore = email.trim();
+    // Normalize email to lowercase
+    const emailToStore = email.toLowerCase().trim();
 
-    // Check if user already exists (case-insensitive check for duplicates)
-    const existingUser = await User.findOne({ 
-      email: { $regex: new RegExp(`^${emailToStore}$`, 'i') }
+    // Check if user already exists (case-insensitive)
+    const existingUser = await User.findOne({
+      email: { $regex: new RegExp(`^${emailToStore.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
     });
     if (existingUser) {
       logger.warn('❌ REGISTRATION FAILED - EMAIL EXISTS', {
         email: emailToStore,
-        attemptedEmail: email,
         ip: req.ip
       });
-      
+
       return res.status(400).json({
         success: false,
         message: 'User already exists with this email'
@@ -104,7 +108,6 @@ router.post('/register', registerLimiter, [
     const timestamp = Date.now().toString().slice(-8);
     let username = `${firstNamePart}_${timestamp}`;
 
-    // Ensure username is within length limits
     if (username.length > 30) {
       username = username.substring(0, 30);
     }
@@ -129,19 +132,15 @@ router.post('/register', registerLimiter, [
       attempts++;
     }
 
-    // Prepare user data
-    const userData = { 
-      username, 
-      email: emailToStore, 
+    const user = await User.create({
+      username,
+      email: emailToStore,
       password,
       firstName: firstName.trim(),
       lastName: lastName.trim(),
       mobile: mobile || ''
-    };
+    });
 
-    // Create user
-    const user = await User.create(userData);
-    
     logger.info('✅ USER CREATED', {
       userId: user._id,
       username: user.username,
@@ -151,14 +150,13 @@ router.post('/register', registerLimiter, [
       hasMobile: !!user.mobile
     });
 
-    // Create session for this device
     const session = await Session.create({
       userId: user._id,
       username: user.username,
       deviceId,
       expiresAt: Session.newExpiresAt()
     });
-    
+
     logger.info('✅ SESSION CREATED', {
       userId: user._id,
       sessionId: session._id,
@@ -167,9 +165,8 @@ router.post('/register', registerLimiter, [
     });
 
     const token = generateToken(user._id, session._id);
-    
     const registrationDuration = Date.now() - registrationStartTime;
-    
+
     logger.info('✅ REGISTRATION SUCCESSFUL', {
       userId: user._id,
       username: user.username,
@@ -199,7 +196,7 @@ router.post('/register', registerLimiter, [
 
   } catch (error) {
     const registrationDuration = Date.now() - registrationStartTime;
-    
+
     logger.error('❌ REGISTRATION ERROR', {
       email: req.body.email,
       error: error.message,
@@ -207,7 +204,7 @@ router.post('/register', registerLimiter, [
       duration: `${registrationDuration}ms`,
       ip: req.ip
     });
-    
+
     res.status(500).json({
       success: false,
       message: 'Server error during registration'
@@ -220,10 +217,10 @@ router.post('/register', registerLimiter, [
 // @access  Public
 router.post('/login', async (req, res) => {
   const loginStartTime = Date.now();
-  
+
   try {
     const { email, password, deviceId } = req.body;
-    
+
     logger.info('🔐 LOGIN ATTEMPT', {
       email: email,
       deviceId: deviceId,
@@ -231,174 +228,133 @@ router.post('/login', async (req, res) => {
       userAgent: req.get('User-Agent')
     });
 
-    // Validate email format first
+    // Validate email
     if (!email) {
-      logger.warn('❌ LOGIN FAILED - NO EMAIL', {
-        ip: req.ip
-      });
-      
       return res.status(400).json({
         success: false,
-        message: 'Email is invalid'
+        message: 'Validation failed',
+        errors: [{ field: 'email', message: 'Email is required' }]
       });
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
-      logger.warn('❌ LOGIN FAILED - INVALID EMAIL FORMAT', {
-        email: email,
-        ip: req.ip
-      });
-      
       return res.status(400).json({
         success: false,
-        message: 'Email is invalid'
+        message: 'Validation failed',
+        errors: [{ field: 'email', message: 'Please provide a valid email' }]
       });
     }
 
-    // deviceId is required
+    if (!password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: [{ field: 'password', message: 'Password is required' }]
+      });
+    }
+
     if (!deviceId) {
-      logger.warn('❌ LOGIN FAILED - NO DEVICE ID', {
-        email: email,
-        ip: req.ip
-      });
-      
       return res.status(400).json({
         success: false,
-        message: 'deviceId is required'
+        message: 'Validation failed',
+        errors: [{ field: 'deviceId', message: 'deviceId is required' }]
       });
     }
 
-    // Keep email as-is, only trim whitespace
-    const emailToSearch = email.trim();
+    // Normalize email to lowercase before lookup
+    const emailToSearch = email.toLowerCase().trim();
 
-    // Check user exists (case-insensitive search)
-    const user = await User.findOne({ 
-      email: { $regex: new RegExp(`^${emailToSearch}$`, 'i') }
+    const user = await User.findOne({
+      email: { $regex: new RegExp(`^${emailToSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
     }).select('+password');
+
     if (!user) {
-      logger.warn('❌ LOGIN FAILED - USER NOT FOUND', {
-        email: emailToSearch,
-        ip: req.ip
-      });
-      
+      logger.warn('❌ LOGIN FAILED - USER NOT FOUND', { email: emailToSearch, ip: req.ip });
       return res.status(401).json({
         success: false,
         message: 'No account found with this email'
       });
     }
 
-    // Check account active
     if (!user.isActive) {
-      logger.warn('❌ LOGIN FAILED - ACCOUNT DEACTIVATED', {
-        userId: user._id,
-        email: user.email,
-        ip: req.ip
-      });
-      
+      logger.warn('❌ LOGIN FAILED - ACCOUNT DEACTIVATED', { userId: user._id, ip: req.ip });
       return res.status(401).json({
         success: false,
         message: 'Account is deactivated'
       });
     }
 
-    // Check password provided
-    if (!password) {
-      logger.warn('❌ LOGIN FAILED - NO PASSWORD', {
-        userId: user._id,
-        email: user.email,
-        ip: req.ip
-      });
-      
-      return res.status(400).json({
-        success: false,
-        message: 'Password is required'
-      });
-    }
-
-    // Verify password
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
-      logger.warn('❌ LOGIN FAILED - INVALID PASSWORD', {
-        userId: user._id,
-        email: user.email,
-        ip: req.ip
-      });
-      
+      logger.warn('❌ LOGIN FAILED - INVALID PASSWORD', { userId: user._id, ip: req.ip });
       return res.status(401).json({
         success: false,
-        message: 'Email is valid and password is invalid'
+        message: 'Invalid password'
       });
     }
 
-    // Update last login timestamp
     user.lastLogin = new Date();
     await user.save();
-    
-    logger.info('✅ PASSWORD VERIFIED', {
-      userId: user._id,
-      email: user.email
-    });
 
-    // --- Session management ---
+    logger.info('✅ PASSWORD VERIFIED', { userId: user._id, email: user.email });
+
     const now = new Date();
     let session = await Session.findOne({ userId: user._id, deviceId });
     let isResumed = false;
 
     if (session && session.isActive && session.expiresAt > now) {
-      // Same device, valid session — resume and extend by 120 hours
       session.expiresAt = Session.newExpiresAt();
       session.lastAccessedAt = now;
+      session.lastUsedAt = now;
       await session.save();
       isResumed = true;
-      
+
       logger.info('♻️  SESSION RESUMED', {
         userId: user._id,
         sessionId: session._id,
-        deviceId: deviceId,
+        deviceId,
         expiresAt: session.expiresAt
       });
     } else if (session) {
-      // Same device but session expired or was terminated — reactivate
       session.isActive = true;
       session.expiresAt = Session.newExpiresAt();
       session.lastAccessedAt = now;
+      session.lastUsedAt = now;
       await session.save();
-      
+
       logger.info('🔄 SESSION REACTIVATED', {
         userId: user._id,
         sessionId: session._id,
-        deviceId: deviceId,
-        wasExpired: true,
+        deviceId,
         expiresAt: session.expiresAt
       });
     } else {
-      // New device — create a fresh session
       session = await Session.create({
         userId: user._id,
         username: user.username,
         deviceId,
         expiresAt: Session.newExpiresAt()
       });
-      
+
       logger.info('✅ NEW SESSION CREATED', {
         userId: user._id,
         sessionId: session._id,
-        deviceId: deviceId,
+        deviceId,
         expiresAt: session.expiresAt
       });
     }
 
     const token = generateToken(user._id, session._id);
     const loginDuration = Date.now() - loginStartTime;
-    
+
     logger.info('✅ LOGIN SUCCESSFUL', {
       userId: user._id,
       username: user.username,
       email: user.email,
       sessionId: session._id,
       deviceId: session.deviceId,
-      isResumed: isResumed,
+      isResumed,
       duration: `${loginDuration}ms`,
       ip: req.ip
     });
@@ -423,7 +379,7 @@ router.post('/login', async (req, res) => {
 
   } catch (error) {
     const loginDuration = Date.now() - loginStartTime;
-    
+
     logger.error('❌ LOGIN ERROR', {
       email: req.body.email,
       error: error.message,
@@ -431,10 +387,74 @@ router.post('/login', async (req, res) => {
       duration: `${loginDuration}ms`,
       ip: req.ip
     });
-    
+
     res.status(500).json({
       success: false,
       message: 'Server error during login'
+    });
+  }
+});
+
+// @route   GET /api/auth/me
+// @desc    Return current user from token — fast session validator, no AI or profile lookups
+// @access  Private
+router.get('/me', auth, async (req, res) => {
+  try {
+    const user = req.user;
+    const session = req.session;
+
+    res.json({
+      success: true,
+      message: 'User retrieved successfully',
+      user: {
+        id: user._id,
+        username: user.username,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        mobile: user.mobile
+      },
+      session: {
+        id: session._id,
+        deviceId: session.deviceId,
+        expiresAt: session.expiresAt
+      }
+    });
+  } catch (error) {
+    logger.error('❌ GET /me ERROR', { error: error.message, stack: error.stack });
+    res.status(500).json({
+      success: false,
+      message: 'Server error fetching user'
+    });
+  }
+});
+
+// @route   POST /api/auth/logout
+// @desc    Invalidate current device session (sets isActive = false, does not delete)
+// @access  Private
+router.post('/logout', auth, async (req, res) => {
+  try {
+    const session = req.session;
+
+    // Only invalidate the session for this device
+    session.isActive = false;
+    await session.save();
+
+    logger.info('✅ LOGOUT SUCCESSFUL', {
+      userId: req.user._id,
+      sessionId: session._id,
+      deviceId: session.deviceId
+    });
+
+    res.json({
+      success: true,
+      message: 'Logged out successfully'
+    });
+  } catch (error) {
+    logger.error('❌ LOGOUT ERROR', { error: error.message, stack: error.stack });
+    res.status(500).json({
+      success: false,
+      message: 'Server error during logout'
     });
   }
 });

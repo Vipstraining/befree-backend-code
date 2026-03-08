@@ -26,6 +26,7 @@ try {
 }
 
 // Import database connection
+const mongoose = require('mongoose');
 const connectDB = require('./config/database');
 
 // Import routes
@@ -326,32 +327,52 @@ app.use('/api/auth/', (req, res, next) => {
 app.use('/api/search/', searchLimiter);
 
 // Health check endpoint
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
   logger.info('Health check requested', { ip: req.ip });
-  
+
+  // Check DB connectivity
+  let dbStatus = 'disconnected';
+  let dbPingMs = null;
+  try {
+    if (mongoose.connection.readyState === 1) {
+      const pingStart = Date.now();
+      await mongoose.connection.db.admin().ping();
+      dbPingMs = Date.now() - pingStart;
+      dbStatus = 'connected';
+    }
+  } catch (pingErr) {
+    dbStatus = 'error';
+    logger.warn('Health check DB ping failed', { error: pingErr.message });
+  }
+
+  const memUsage = process.memoryUsage();
+  const isHealthy = dbStatus === 'connected';
+  const statusCode = isHealthy ? 200 : 503;
+
   const healthData = {
-    success: true,
-    message: 'Server is running',
+    success: isHealthy,
+    message: isHealthy ? 'Server is running' : 'Server is degraded',
     timestamp: new Date().toISOString(),
     environment: config.NODE_ENV,
     version: '1.0.0',
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    endpoints: endpoints.current.api,
-    config: {
-      cors: config.CORS_ORIGINS,
-      rateLimit: {
-        window: config.RATE_LIMIT_WINDOW_MS,
-        max: config.RATE_LIMIT_MAX_REQUESTS
-      },
+    uptime: Math.floor(process.uptime()),
+    services: {
       database: {
-        connected: true, // This will be updated by database connection
-        uri: config.MONGODB_URI ? 'configured' : 'not configured'
+        status: dbStatus,
+        pingMs: dbPingMs
+      },
+      claude: {
+        status: process.env.CLAUDE_API_KEY ? 'configured' : 'not configured'
       }
+    },
+    memory: {
+      heapUsedMB: Math.round(memUsage.heapUsed / 1024 / 1024 * 10) / 10,
+      heapTotalMB: Math.round(memUsage.heapTotal / 1024 / 1024 * 10) / 10,
+      rssMB: Math.round(memUsage.rss / 1024 / 1024 * 10) / 10
     }
   };
-  
-  res.json(healthData);
+
+  res.status(statusCode).json(healthData);
 });
 
 // Test endpoint for frontend development
@@ -442,6 +463,9 @@ connectDB()
 const PORT = config.PORT || 3000;
 
 const server = app.listen(PORT, () => {
+  const jwtPresent = !!(process.env.JWT_SECRET);
+  const claudePresent = !!(process.env.CLAUDE_API_KEY);
+
   logger.info('Server started successfully', {
     port: PORT,
     environment: config.NODE_ENV,
@@ -449,28 +473,59 @@ const server = app.listen(PORT, () => {
     frontendUrl: config.FRONTEND_URL,
     corsOrigins: corsOrigins,
     uploadPath: config.UPLOAD_PATH,
-    logLevel: config.LOG_LEVEL
+    logLevel: config.LOG_LEVEL,
+    jwtSecretPresent: jwtPresent,
+    claudeApiKeyPresent: claudePresent,
+    rateLimitConfig: {
+      generalApi: '100 req / 15 min',
+      auth: '10 req / 15 min',
+      register: '20 req / 15 min',
+      search: '10 req / 1 min'
+    }
   });
-  
+
+  if (!jwtPresent) {
+    logger.warn('JWT_SECRET not set — using insecure default. Set JWT_SECRET in production.');
+  }
+  if (!claudePresent) {
+    logger.warn('CLAUDE_API_KEY not set — AI search analysis will not work.');
+  }
+
   // Console output for development
   if (config.NODE_ENV === 'development') {
     console.log('\n🚀 ===========================================');
     console.log(`   Befree API Server Started Successfully`);
     console.log('🚀 ===========================================');
-    console.log(`📊 Environment: ${config.NODE_ENV}`);
-    console.log(`🌐 Port: ${PORT}`);
-    console.log(`🔗 API Base URL: ${config.API_BASE_URL}`);
-    console.log(`🎯 Frontend URL: ${config.FRONTEND_URL}`);
-    console.log(`📁 Upload Path: ${config.UPLOAD_PATH}`);
-    console.log(`🔒 CORS Origins: ${corsOrigins.join(', ')}`);
-    console.log(`📝 Log Level: ${config.LOG_LEVEL}`);
-    console.log('🚀 ===========================================\n');
+    console.log(`📊 Environment:      ${config.NODE_ENV}`);
+    console.log(`🌐 Port:             ${PORT}`);
+    console.log(`🔗 API Base URL:     ${config.API_BASE_URL}`);
+    console.log(`🎯 Frontend URL:     ${config.FRONTEND_URL}`);
+    console.log(`📁 Upload Path:      ${config.UPLOAD_PATH}`);
+    console.log(`🔒 CORS Origins:     ${corsOrigins.join(', ')}`);
+    console.log(`📝 Log Level:        ${config.LOG_LEVEL}`);
+    console.log(`🔑 JWT_SECRET:       ${jwtPresent ? 'present' : 'MISSING (using default)'}`);
+    console.log(`🤖 CLAUDE_API_KEY:   ${claudePresent ? 'present' : 'MISSING'}`);
+    console.log('🚀 ===========================================');
+    console.log('⚡ Rate Limits:');
+    console.log('   General API:  100 req / 15 min');
+    console.log('   Auth:          10 req / 15 min');
+    console.log('   Register:      20 req / 15 min');
+    console.log('   Search:        10 req / 1 min');
+    console.log('🚀 ===========================================');
     console.log('📋 Available Endpoints:');
-    console.log(`   GET  /health          - Health check`);
-    console.log(`   GET  /api/test        - Test endpoint`);
-    console.log(`   GET  /api/auth/*      - Authentication routes`);
-    console.log(`   GET  /api/profile/*   - Profile routes`);
-    console.log(`   GET  /api/search/*    - Search routes`);
+    console.log('   GET    /health                  - Health check');
+    console.log('   GET    /api/test                - Test endpoint');
+    console.log('   POST   /api/auth/register       - Register');
+    console.log('   POST   /api/auth/login          - Login');
+    console.log('   GET    /api/auth/me             - Current user (private)');
+    console.log('   POST   /api/auth/logout         - Logout (private)');
+    console.log('   GET    /api/profile/            - User profile (private)');
+    console.log('   PUT    /api/profile/            - Update profile (private)');
+    console.log('   POST   /api/search/             - Product search (private)');
+    console.log('   GET    /api/search/history      - Search history (private)');
+    console.log('   GET    /api/search/analytics    - Analytics (private)');
+    console.log('   GET    /api/search/trending     - Trending (public)');
+    console.log('   GET    /api/profile/health      - Health profile (private)');
     console.log('🚀 ===========================================\n');
   }
 });

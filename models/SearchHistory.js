@@ -4,61 +4,42 @@ const searchHistorySchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: false
+    required: true,
+    index: true
   },
-  searchType: {
+  deviceId: {
     type: String,
-    enum: ['barcode', 'product_name', 'ingredient'],
-    required: true
+    required: true,
+    trim: true
   },
   searchQuery: {
     type: String,
     required: true,
     trim: true
   },
-  barcode: {
+  searchType: {
     type: String,
-    trim: true
+    enum: ['product_name', 'barcode', 'ingredients', 'general'],
+    required: true
   },
-  productName: {
-    type: String,
-    trim: true
-  },
-  nutritionalAnalysis: {
+  result: {
     healthImpact: {
       type: String,
       enum: ['positive', 'negative', 'neutral', 'caution']
     },
     score: { type: Number, min: 0, max: 100 },
-    analysis: { type: String },
-    recommendations: [{ type: String }],
-    warnings: [{ type: String }],
-    benefits: [{ type: String }]
-  },
-  userContext: {
-    profile: { type: mongoose.Schema.Types.Mixed },
-    recentSearches: [{ type: String }],
-    patterns: [{ type: String }]
-  },
-  searchMetadata: {
-    timestamp: { type: Date, default: Date.now },
-    userAgent: { type: String },
-    ipAddress: { type: String },
-    sessionId: { type: String }
-  },
-  feedback: {
-    rating: { type: Number, min: 1, max: 5 },
-    helpful: { type: Boolean },
-    comments: { type: String, trim: true },
-    submittedAt: { type: Date }
+    simpleSummary: { type: String },
+    isFallback: { type: Boolean, default: false },
+    isPersonalized: { type: Boolean, default: false }
   }
 }, {
   timestamps: true
 });
 
-// Index for better query performance
-searchHistorySchema.index({ userId: 1, timestamp: -1 });
-searchHistorySchema.index({ searchType: 1 });
-searchHistorySchema.index({ 'nutritionalAnalysis.healthImpact': 1 });
+// Query index: user history sorted by time
+searchHistorySchema.index({ userId: 1, createdAt: -1 });
+
+// TTL index: auto-delete records after 90 days
+searchHistorySchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 });
 
 module.exports = mongoose.model('SearchHistory', searchHistorySchema);

@@ -17,6 +17,8 @@
     "docs:open": "node scripts/open-docs.js",
     "seed": "NODE_ENV=development node scripts/seed.js",
     "seed:prod": "NODE_ENV=production node scripts/seed.js",
+    "migrate:email": "node scripts/migrate-email-lowercase.js",
+    "db:indexes": "node scripts/ensure-indexes.js",
     "build": "echo 'No build step required for Node.js'",
     "deploy:staging": "NODE_ENV=staging npm start",
     "deploy:prod": "NODE_ENV=production npm start"
