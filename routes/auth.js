@@ -29,7 +29,6 @@ router.post('/register', registerLimiter, [
     .withMessage('Username can only contain letters, numbers, and underscores'),
   body('email')
     .isEmail()
-    .normalizeEmail()
     .withMessage('Please provide a valid email'),
   body('password')
     .isLength({ min: 6 })
@@ -38,7 +37,10 @@ router.post('/register', registerLimiter, [
     .notEmpty()
     .withMessage('deviceId is required')
     .isLength({ min: 1, max: 200 })
-    .withMessage('deviceId must be between 1 and 200 characters')
+    .withMessage('deviceId must be between 1 and 200 characters'),
+  body('mobile')
+    .optional()
+    .trim()
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -50,10 +52,15 @@ router.post('/register', registerLimiter, [
       });
     }
 
-    let { username, email, password, name, deviceId } = req.body;
+    let { username, email, password, firstName, mobile, deviceId } = req.body;
 
-    // Check if user already exists
-    const existingUser = await User.findOne({ email });
+    // Keep email as-is without normalization
+    const emailToStore = email.trim();
+
+    // Check if user already exists (case-insensitive check for duplicates)
+    const existingUser = await User.findOne({ 
+      email: { $regex: new RegExp(`^${emailToStore}$`, 'i') }
+    });
     if (existingUser) {
       return res.status(400).json({
         success: false,
@@ -61,11 +68,16 @@ router.post('/register', registerLimiter, [
       });
     }
 
-    // Generate username from name and email if not provided
+    // Generate username from firstName and timestamp
     if (!username) {
-      const namePart = name ? name.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '') : '';
-      const emailPart = email.split('@')[0].toLowerCase().replace(/[^a-zA-Z0-9_]/g, '');
-      username = namePart ? `${namePart}_${emailPart}` : emailPart;
+      if (!firstName || firstName.trim() === '') {
+        return res.status(400).json({
+          success: false,
+          message: 'firstName is required to generate username'
+        });
+      }
+      const firstNamePart = firstName.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
+      username = firstNamePart;
     }
 
     // Always append timestamp suffix to ensure uniqueness
@@ -97,8 +109,17 @@ router.post('/register', registerLimiter, [
       attempts++;
     }
 
+    // Prepare user data - mobile can be blank/empty
+    const userData = { 
+      username, 
+      email: emailToStore, 
+      password,
+      firstName: firstName || '',
+      mobile: mobile || ''
+    };
+
     // Create user
-    const user = await User.create({ username, email, password });
+    const user = await User.create(userData);
 
     // Create session for this device
     const session = await Session.create({
@@ -167,10 +188,13 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    const normalizedEmail = email.toLowerCase().trim();
+    // Keep email as-is, only trim whitespace
+    const emailToSearch = email.trim();
 
-    // Check user exists
-    const user = await User.findOne({ email: normalizedEmail }).select('+password');
+    // Check user exists (case-insensitive search)
+    const user = await User.findOne({ 
+      email: { $regex: new RegExp(`^${emailToSearch}$`, 'i') }
+    }).select('+password');
     if (!user) {
       return res.status(401).json({
         success: false,

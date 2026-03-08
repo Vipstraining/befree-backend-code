@@ -13,9 +13,17 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Email is required'],
     unique: true,
-    lowercase: true,
     trim: true,
     match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please enter a valid email']
+  },
+  mobile: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  firstName: {
+    type: String,
+    trim: true
   },
   password: {
     type: String,

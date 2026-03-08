@@ -5,9 +5,12 @@ A comprehensive Node.js backend API for a food catalog application that provides
 ## Features
 
 ### 🔐 Authentication Module
-- User registration with email and username validation
+- User registration with email, firstName, and optional mobile
+- Auto-generated unique usernames with timestamp suffix
+- Email stored as-is (preserves original casing)
+- Device-based session management with rolling expiration
 - Secure login with JWT tokens
-- Password hashing with bcrypt
+- Password hashing with bcrypt (12 rounds in production)
 - Account deactivation
 
 ### 👤 Profile Management
@@ -106,9 +109,11 @@ A comprehensive Node.js backend API for a food catalog application that provides
 ## Database Schema
 
 ### Users Collection
-- `username` (String, unique, required)
-- `email` (String, unique, required)
-- `password` (String, hashed, required)
+- `username` (String, unique, required, auto-generated with timestamp)
+- `email` (String, unique, required, stored as-is)
+- `firstName` (String, used for username generation)
+- `mobile` (String, optional, can be blank)
+- `password` (String, hashed with bcrypt, required)
 - `isActive` (Boolean, default: true)
 - `lastLogin` (Date)
 - `createdAt` (Date)
@@ -220,11 +225,40 @@ The application includes comprehensive logging:
 curl -X POST http://localhost:3000/api/auth/register \
   -H "Content-Type: application/json" \
   -d '{
-    "username": "john_doe",
-    "email": "john@example.com",
-    "password": "SecurePass123"
+    "email": "John.Doe@Example.com",
+    "password": "SecurePass123",
+    "deviceId": "device-uuid-123",
+    "firstName": "John",
+    "mobile": "+1-555-123-4567"
   }'
 ```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "User registered successfully",
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": "65abc123def456",
+    "username": "john_17098765",
+    "email": "John.Doe@Example.com"
+  },
+  "session": {
+    "id": "65session789xyz",
+    "deviceId": "device-uuid-123",
+    "expiresAt": "2026-03-14T12:30:00.000Z",
+    "isResumed": false
+  }
+}
+```
+
+**Key Points:**
+- Email is stored exactly as submitted (preserves casing)
+- Username is auto-generated from `firstName` + timestamp (e.g., `john_17098765`)
+- `mobile` field is optional and can be blank or omitted
+- `deviceId` is required for session management
+- Session expires after 120 hours of inactivity (rolling expiration)
 
 ### Search Product
 ```bash

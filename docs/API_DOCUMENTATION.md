@@ -275,27 +275,49 @@ Register a new user. Automatically creates a session for the device.
 
 ```json
 {
-  "email": "user@example.com",
+  "email": "User@Example.com",
   "password": "mypassword",
   "deviceId": "device-uuid-abc123",
-  "username": "optional_username",
-  "name": "Optional Full Name"
+  "firstName": "John",
+  "mobile": "+1234567890",
+  "username": "optional_username"
 }
 ```
 
 | Field | Required | Rules |
 |-------|----------|-------|
-| `email` | Yes | Valid email, must be unique |
+| `email` | Yes | Valid email, must be unique. **Email is stored exactly as submitted** (not normalized or lowercased). Case-sensitive storage. |
 | `password` | Yes | Minimum 6 characters |
-| `deviceId` | Yes | 1–200 chars, stable device identifier |
+| `deviceId` | Yes | 1–200 chars, stable device identifier (UUID, device fingerprint, etc.) |
+| `firstName` | Required if `username` not provided | Used to auto-generate `username` if `username` is omitted. Whitespace and special chars are stripped. |
+| `mobile` | No | Phone number. **Can be blank/empty string or omitted entirely.** Stored as-is in database. |
 | `username` | No | 3–22 chars, alphanumeric + underscore. A `_TIMESTAMP` suffix is always appended to guarantee uniqueness. |
-| `name` | No | Used to auto-generate `username` if omitted |
 
-#### Username generation
+#### Important Notes
 
-If `username` is not provided, it is derived from `name` and the email prefix. A timestamp suffix (`_XXXXXXXX`) is always appended. Final username is capped at 30 characters.
+- **Email Handling**: Email addresses are stored exactly as you submit them. `User@Example.com` will be stored as `User@Example.com`, not `user@example.com`.
+- **Mobile Field**: The mobile field is optional and can be:
+  - Omitted from the request body entirely
+  - Sent as an empty string `""`
+  - Sent with a valid phone number
+- **Username Uniqueness**: All usernames automatically get an 8-digit timestamp suffix (`_12345678`) to ensure uniqueness.
 
-Example: `name="John Doe"`, `email="john@example.com"` → `john_doe_john_12345678`
+#### Username Generation Rules
+
+If `username` is not provided, it is auto-generated from `firstName`:
+1. `firstName` is converted to lowercase
+2. Spaces are replaced with underscores
+3. Special characters are removed (only alphanumeric and underscore allowed)
+4. Timestamp suffix is appended (`_XXXXXXXX`)
+5. Final username is capped at 30 characters
+
+**Examples:**
+- `firstName="John"` → `john_12345678`
+- `firstName="Mary Jane"` → `mary_jane_12345678`
+- `firstName="José"` → `jos_12345678`
+
+If `username` is provided:
+- `username="custom_user"` → `custom_user_12345678`
 
 #### Success Response `201`
 
@@ -306,8 +328,8 @@ Example: `name="John Doe"`, `email="john@example.com"` → `john_doe_john_123456
   "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
   "user": {
     "id": "64abc123def456",
-    "username": "john_doe_12345678",
-    "email": "user@example.com"
+    "username": "john_12345678",
+    "email": "User@Example.com"
   },
   "session": {
     "id": "64session789xyz",
@@ -318,6 +340,13 @@ Example: `name="John Doe"`, `email="john@example.com"` → `john_doe_john_123456
 }
 ```
 
+**Response Fields:**
+- `token`: JWT token to use for authenticated requests (expires in 30 days)
+- `user.username`: The generated/assigned username (includes timestamp suffix)
+- `user.email`: The email address exactly as submitted
+- `session.expiresAt`: Session expiration (rolling 120 hours from last activity)
+- `session.isResumed`: Always `false` for new registrations
+
 #### Error Responses
 
 `400` Validation failed:
@@ -327,6 +356,7 @@ Example: `name="John Doe"`, `email="john@example.com"` → `john_doe_john_123456
   "message": "Validation failed",
   "errors": [
     { "path": "email", "msg": "Please provide a valid email" },
+    { "path": "password", "msg": "Password must be at least 6 characters long" },
     { "path": "deviceId", "msg": "deviceId is required" }
   ]
 }
@@ -339,6 +369,157 @@ Example: `name="John Doe"`, `email="john@example.com"` → `john_doe_john_123456
   "message": "User already exists with this email"
 }
 ```
+
+`400` Missing firstName when username not provided:
+```json
+{
+  "success": false,
+  "message": "firstName is required to generate username"
+}
+```
+
+`400` Generated username too short:
+```json
+{
+  "success": false,
+  "message": "Generated username is too short"
+}
+```
+
+`500` Server error:
+```json
+{
+  "success": false,
+  "message": "Server error during registration"
+}
+```
+
+#### Complete Examples
+
+**Example 1: Registration with all fields**
+```bash
+curl -X POST http://localhost:3000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "Sarah.Johnson@Example.com",
+    "password": "securePass123",
+    "deviceId": "550e8400-e29b-41d4-a716-446655440000",
+    "firstName": "Sarah",
+    "mobile": "+1-555-123-4567"
+  }'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "message": "User registered successfully",
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY1YWJjMTIz...",
+  "user": {
+    "id": "65abc123def456",
+    "username": "sarah_17098765",
+    "email": "Sarah.Johnson@Example.com"
+  },
+  "session": {
+    "id": "65session789xyz",
+    "deviceId": "550e8400-e29b-41d4-a716-446655440000",
+    "expiresAt": "2026-03-14T12:30:00.000Z",
+    "isResumed": false
+  }
+}
+```
+
+**Example 2: Registration without mobile (blank mobile)**
+```bash
+curl -X POST http://localhost:3000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "john.doe@company.com",
+    "password": "myPassword456",
+    "deviceId": "device-abc-123",
+    "firstName": "John",
+    "mobile": ""
+  }'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "message": "User registered successfully",
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": "65def789abc123",
+    "username": "john_17098766",
+    "email": "john.doe@company.com"
+  },
+  "session": {
+    "id": "65xyz456session",
+    "deviceId": "device-abc-123",
+    "expiresAt": "2026-03-14T12:35:00.000Z",
+    "isResumed": false
+  }
+}
+```
+
+**Example 3: Registration with custom username**
+```bash
+curl -X POST http://localhost:3000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "alex@startup.io",
+    "password": "strongPass789",
+    "deviceId": "mobile-device-xyz",
+    "firstName": "Alex",
+    "username": "alex_dev"
+  }'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "message": "User registered successfully",
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": "65ghi789jkl012",
+    "username": "alex_dev_17098767",
+    "email": "alex@startup.io"
+  },
+  "session": {
+    "id": "65abc111session",
+    "deviceId": "mobile-device-xyz",
+    "expiresAt": "2026-03-14T12:40:00.000Z",
+    "isResumed": false
+  }
+}
+```
+
+**Example 4: Email case sensitivity demonstration**
+
+Registering with `User@Example.com`:
+```json
+{
+  "email": "User@Example.com",
+  "password": "pass123",
+  "deviceId": "device-1",
+  "firstName": "Test"
+}
+```
+✅ Stored as: `User@Example.com`
+
+Later, trying to register with `user@example.com`:
+```json
+{
+  "email": "user@example.com",
+  "password": "pass456",
+  "deviceId": "device-2",
+  "firstName": "Test2"
+}
+```
+❌ Error: Email already exists (because the exact match is found)
+
+**Note**: While emails are stored as-is, the uniqueness check is case-insensitive to prevent duplicate accounts with different casing.
 
 ---
 
@@ -361,7 +542,7 @@ Login with email and password. Creates a new session for a new device, or resume
 
 | Field | Required | Notes |
 |-------|----------|-------|
-| `email` | Yes | Case-insensitive |
+| `email` | Yes | Email stored as-is during registration |
 | `password` | Yes | — |
 | `deviceId` | Yes | Must match the value used on this device since initial login |
 
