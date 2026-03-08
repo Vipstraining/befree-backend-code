@@ -363,6 +363,19 @@ app.use((error, req, res, next) => {
 // Error handling middleware (must be last)
 app.use(errorHandler);
 
+// Connect to database in background (non-blocking)
+logger.info('Attempting to connect to database in background...');
+connectDB()
+  .then(() => {
+    logger.info('✅ Database connected successfully');
+  })
+  .catch((error) => {
+    logger.warn('⚠️  Database connection failed. Server will run without database.', {
+      error: error.message,
+      note: 'Authentication and data operations will not work until database is connected'
+    });
+  });
+
 // Start server
 const PORT = config.PORT || 3000;
 
