@@ -6,7 +6,7 @@ class ClaudeAIService {
     this.client = new Anthropic({
       apiKey: process.env.CLAUDE_API_KEY
     });
-    this.model = process.env.CLAUDE_MODEL || 'claude-sonnet-4-6';
+    this.model = process.env.CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
   }
 
   async analyzeProduct(searchQuery, searchType, userProfile = null) {
