@@ -47,7 +47,7 @@ const createLogger = () => {
     const timestamp = formatTimestamp();
     
     // Pretty print for detailed request/response logs
-    if (message.includes('REQUEST') || message.includes('RESPONSE')) {
+    if (typeof message === 'string' && (message.includes('REQUEST') || message.includes('RESPONSE'))) {
       const metaStr = Object.keys(meta).length ? `\n${JSON.stringify(meta, null, 2)}` : '';
       return `[${timestamp}] [${level.toUpperCase()}] ${message}${metaStr}`;
     }
@@ -90,7 +90,6 @@ const createLogger = () => {
   };
   
   return {
-    error: (message, meta) => log('error', message, meta),
     warn: (message, meta) => log('warn', message, meta),
     info: (message, meta) => log('info', message, meta),
     debug: (message, meta) => log('debug', message, meta),
@@ -138,11 +137,12 @@ const createLogger = () => {
       });
     },
     
-    error: (error, context = {}) => {
-      log('error', error.message, {
-        stack: error.stack,
-        ...context
-      });
+    error: (messageOrError, context = {}) => {
+      if (messageOrError instanceof Error) {
+        log('error', messageOrError.message, { stack: messageOrError.stack, ...context });
+      } else {
+        log('error', messageOrError, context);
+      }
     }
   };
 };
