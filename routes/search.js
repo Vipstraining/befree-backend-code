@@ -1,5 +1,6 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
+const axios = require('axios');
 const SearchHistory = require('../models/SearchHistory');
 const HealthProfile = require('../models/HealthProfile');
 const claudeService = require('../services/claudeService');
@@ -11,6 +12,57 @@ const router = express.Router();
 // In-memory analytics cache: userId -> { data, timestamp }
 const analyticsCache = new Map();
 const ANALYTICS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+// Fetch product data from Open Food Facts by barcode
+async function fetchOpenFoodFacts(barcode) {
+  // Validate barcode: digits only, 8–14 chars
+  if (!/^\d{8,14}$/.test(barcode.trim())) {
+    return { success: false, error: 'invalid_barcode', message: 'Barcode must be 8–14 digits.' };
+  }
+
+  try {
+    const response = await axios.get(
+      `https://world.openfoodfacts.org/api/v0/product/${barcode.trim()}.json`,
+      { timeout: 8000 }
+    );
+
+    if (response.data.status !== 1) {
+      return { success: false, error: 'not_found', message: `No product found for barcode ${barcode}.` };
+    }
+
+    const p = response.data.product;
+    return {
+      success: true,
+      product: {
+        name:         p.product_name       || p.product_name_en || 'Unknown Product',
+        brand:        p.brands             || 'Unknown Brand',
+        category:     p.categories         || 'Unknown Category',
+        quantity:     p.quantity           || null,
+        ingredients:  p.ingredients_text   || null,
+        imageUrl:     p.image_url          || null,
+        nutrition: {
+          calories:      p.nutriments?.['energy-kcal_100g']   ?? null,
+          fat:           p.nutriments?.fat_100g               ?? null,
+          saturatedFat:  p.nutriments?.['saturated-fat_100g'] ?? null,
+          carbs:         p.nutriments?.carbohydrates_100g     ?? null,
+          sugar:         p.nutriments?.sugars_100g            ?? null,
+          fiber:         p.nutriments?.fiber_100g             ?? null,
+          protein:       p.nutriments?.proteins_100g          ?? null,
+          salt:          p.nutriments?.salt_100g              ?? null,
+          sodium:        p.nutriments?.sodium_100g            ?? null,
+        },
+        nutriscore:   p.nutriscore_grade   || null,
+        novaGroup:    p.nova_group         || null,
+        labels:       p.labels            || null,
+        allergens:    p.allergens_tags     || [],
+        barcode
+      }
+    };
+  } catch (err) {
+    logger.error('Open Food Facts API error', { barcode, error: err.message });
+    return { success: false, error: 'api_error', message: 'Could not reach Open Food Facts API.' };
+  }
+}
 
 // @route   POST /api/search/
 // @desc    Search and analyze product
@@ -58,8 +110,24 @@ router.post('/', auth, [
       // Continue without profile
     }
 
+    // For barcode searches: fetch real product data from Open Food Facts first
+    let openFoodFactsData = null;
+    if (searchType === 'barcode') {
+      const offResult = await fetchOpenFoodFacts(searchQuery);
+      if (!offResult.success) {
+        if (offResult.error === 'invalid_barcode') {
+          return res.status(400).json({ success: false, message: offResult.message });
+        }
+        // not_found or api_error — log and continue, Claude will handle with best effort
+        logger.warn('Open Food Facts lookup failed', { barcode: searchQuery, reason: offResult.error });
+      } else {
+        openFoodFactsData = offResult.product;
+        logger.info('Open Food Facts product found', { barcode: searchQuery, name: openFoodFactsData.name });
+      }
+    }
+
     // Call Claude AI for analysis
-    const analysis = await claudeService.analyzeProduct(searchQuery, searchType, userProfile);
+    const analysis = await claudeService.analyzeProduct(searchQuery, searchType, userProfile, openFoodFactsData);
 
     // Non-blocking save — never let history failure affect the response
     SearchHistory.create({

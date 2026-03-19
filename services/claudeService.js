@@ -9,16 +9,17 @@ class ClaudeAIService {
     this.model = process.env.CLAUDE_MODEL || 'claude-sonnet-4-6';
   }
 
-  async analyzeProduct(searchQuery, searchType, userProfile = null) {
+  async analyzeProduct(searchQuery, searchType, userProfile = null, productData = null) {
     try {
       logger.info('Starting Claude AI analysis', {
         query: searchQuery,
         type: searchType,
         hasUserProfile: !!userProfile,
+        hasProductData: !!productData,
         model: this.model
       });
 
-      const prompt = this.createAnalysisPrompt(searchQuery, searchType, userProfile);
+      const prompt = this.createAnalysisPrompt(searchQuery, searchType, userProfile, productData);
 
       const response = await this.client.messages.create({
         model: this.model,
@@ -52,54 +53,78 @@ class ClaudeAIService {
     }
   }
 
-  createAnalysisPrompt(searchQuery, searchType, userProfile) {
+  createAnalysisPrompt(searchQuery, searchType, userProfile, productData = null) {
     let prompt;
 
     if (searchType === 'barcode') {
-      prompt = `You are a friendly nutrition expert with access to product knowledge from your training data.
+      // Build product data block — use real OFF data if available
+      let productBlock;
+      if (productData) {
+        const n = productData.nutrition;
+        productBlock = `REAL PRODUCT DATA (fetched from Open Food Facts):
+- Name: ${productData.name}
+- Brand: ${productData.brand}
+- Category: ${productData.category}
+- Quantity / Serving: ${productData.quantity || 'Not specified'}
+- Ingredients: ${productData.ingredients || 'Not listed'}
+- Nutri-Score: ${productData.nutriscore ? productData.nutriscore.toUpperCase() : 'Not available'}
+- NOVA Group: ${productData.novaGroup || 'Not available'}
+- Labels: ${productData.labels || 'None'}
+- Allergens: ${productData.allergens.length > 0 ? productData.allergens.join(', ') : 'None listed'}
+- Nutrition per 100g:
+  • Calories: ${n.calories != null ? n.calories + ' kcal' : 'N/A'}
+  • Fat: ${n.fat != null ? n.fat + 'g' : 'N/A'}
+  • Saturated Fat: ${n.saturatedFat != null ? n.saturatedFat + 'g' : 'N/A'}
+  • Carbohydrates: ${n.carbs != null ? n.carbs + 'g' : 'N/A'}
+  • Sugar: ${n.sugar != null ? n.sugar + 'g' : 'N/A'}
+  • Fiber: ${n.fiber != null ? n.fiber + 'g' : 'N/A'}
+  • Protein: ${n.protein != null ? n.protein + 'g' : 'N/A'}
+  • Salt: ${n.salt != null ? n.salt + 'g' : 'N/A'}`;
+      } else {
+        productBlock = `Barcode: ${searchQuery}
+No product data found in Open Food Facts. Use your own knowledge to identify and analyze this product as best you can. Set "identified": false if unknown.`;
+      }
 
-A user scanned a barcode: "${searchQuery}"
+      prompt = `You are a friendly nutrition expert. A user scanned a barcode and here is the product data:
 
-STEP 1 — IDENTIFY THE PRODUCT:
-Use your knowledge to identify this barcode. Many major brand products have well-known barcodes (e.g., Coca-Cola, Lay's, Quaker Oats, etc.). If you recognize the barcode, name the exact product. If you do not recognize it, make a reasonable educated guess based on any partial knowledge, or state it as "Unknown product (barcode: ${searchQuery})".
+${productBlock}
 
-STEP 2 — ANALYZE THE PRODUCT:
-Once identified, provide a full, detailed nutritional and health analysis of that product. Be specific — mention the actual product name, brand, and what it contains.
+Using this data, write a complete, friendly, human-readable nutritional analysis of this product.
 
 CRITICAL: Return ONLY a valid JSON object. Do NOT wrap it in markdown code blocks. Start directly with { and end with }.
 
 Required JSON format:
 {
   "productInfo": {
-    "name": "Exact product name (e.g. 'Coca-Cola Classic 355ml Can')",
-    "brand": "Brand name (e.g. 'The Coca-Cola Company')",
-    "category": "Product category (e.g. 'Carbonated Soft Drink')",
+    "name": "${productData ? productData.name : 'Unknown Product'}",
+    "brand": "${productData ? productData.brand : 'Unknown Brand'}",
+    "category": "${productData ? productData.category : 'Unknown Category'}",
     "barcode": "${searchQuery}",
-    "servingSize": "Typical serving size (e.g. '355ml / 1 can')",
-    "identified": true or false
+    "servingSize": "${productData ? (productData.quantity || 'See packaging') : 'Not specified'}",
+    "nutriscore": "${productData ? (productData.nutriscore || 'N/A') : 'N/A'}",
+    "identified": ${productData ? true : false}
   },
   "healthImpact": "positive|negative|neutral|caution",
   "score": 0-100,
-  "analysis": "2-3 sentence friendly explanation of what this specific product is and how it affects your health. Mention the product name. Use everyday language like talking to a friend.",
-  "recommendations": ["Specific practical advice for this product, e.g. 'Limit to one can per day due to high sugar content'"],
-  "warnings": ["Specific warnings for this product, e.g. 'Contains 39g of sugar per can — that's almost 10 teaspoons!'"],
-  "benefits": ["Any genuine benefits, e.g. 'Provides quick energy' — be honest if there are few benefits"],
+  "analysis": "2-3 sentence friendly explanation using the real product data above. Mention the product name and brand. Talk like a friend, not a doctor.",
+  "recommendations": ["Specific advice based on the actual nutrition data, e.g. 'This has 12g of sugar per 100g — enjoy it in small portions'"],
+  "warnings": ["Real warnings based on the data, e.g. 'High in saturated fat' or 'Contains gluten'"],
+  "benefits": ["Genuine benefits from the data, e.g. 'Good source of fiber with 4g per 100g'"],
   "nutritionalFacts": {
-    "calories": "Actual calorie info for this product, e.g. 'About 140 calories per can'",
-    "macros": "Actual macro breakdown, e.g. '39g sugar, 0g fat, 0g protein'",
-    "keyNutrients": ["Any notable nutrients, vitamins, or minerals in this product"]
+    "calories": "e.g. '250 kcal per 100g — about 375 kcal in a typical 150g serving'",
+    "macros": "e.g. '30g carbs, 12g fat, 8g protein per 100g'",
+    "keyNutrients": ["List standout nutrients, e.g. 'High in Vitamin C', 'Good source of Iron'"]
   },
-  "simpleSummary": "One honest sentence summary about this specific product"
+  "simpleSummary": "One honest plain-English sentence about this specific product"
 }
 
 RULES:
-- Always populate "productInfo" — never leave it empty
-- If barcode is unrecognized, set "identified": false and use your best guess for the product or describe it as unknown
-- Use the actual product name throughout the analysis (not just "this food")
-- Use simple words: "sugar" not "glucose", "salt" not "sodium", "energy" not "calories" in explanations
-- Be honest — if it's junk food, say so kindly
-- Return ONLY the JSON object, no markdown, no extra text
-- Start response with { and end with }`;
+- Use the actual product name and brand throughout — never say "this food"
+- Base analysis on the real nutrition numbers provided above
+- Use simple words: "sugar" not "glucose", "salt" not "sodium", "energy" not "calories" in text
+- Be honest — if the numbers show it's unhealthy, say so kindly
+- Return ONLY the JSON, no markdown, no extra text
+- Start with { and end with }`;
     } else {
       prompt = `You are a friendly nutrition expert. Analyze this food item: "${searchQuery}" (${searchType})
 
