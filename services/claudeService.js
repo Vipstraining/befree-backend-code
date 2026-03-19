@@ -22,7 +22,7 @@ class ClaudeAIService {
 
       const response = await this.client.messages.create({
         model: this.model,
-        max_tokens: 2048,
+        max_tokens: 1024,
         messages: [
           {
             role: 'user',
