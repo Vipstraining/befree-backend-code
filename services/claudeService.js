@@ -1,92 +1,53 @@
-const axios = require('axios');
-const { getConfig } = require('../config/environments');
+const Anthropic = require('@anthropic-ai/sdk');
 const logger = require('../config/logger');
 
-class GoogleAIService {
+class ClaudeAIService {
   constructor() {
-    this.config = getConfig();
-    this.apiKey = 'AIzaSyAox6NOny2eTUCfxMBDgSGVlWBmCfE_NpM'; // Google AI API key
-    this.baseURL = 'https://generativelanguage.googleapis.com/v1beta';
-    this.model = 'gemini-2.5-flash';
+    this.client = new Anthropic({
+      apiKey: process.env.CLAUDE_API_KEY
+    });
+    this.model = process.env.CLAUDE_MODEL || 'claude-sonnet-4-6';
   }
 
   async analyzeProduct(searchQuery, searchType, userProfile = null) {
     try {
-      logger.info('Starting Google AI analysis', {
+      logger.info('Starting Claude AI analysis', {
         query: searchQuery,
         type: searchType,
         hasUserProfile: !!userProfile,
-        apiKeyConfigured: !!this.apiKey,
-        baseURL: this.baseURL,
         model: this.model
       });
 
-      // Create personalized prompt based on user profile
       const prompt = this.createAnalysisPrompt(searchQuery, searchType, userProfile);
 
-      const response = await axios.post(
-        `${this.baseURL}/models/${this.model}:generateContent?key=${this.apiKey}`,
-        {
-          contents: [
-            {
-              parts: [
-                {
-                  text: prompt
-                }
-              ]
-            }
-          ],
-          generationConfig: {
-            temperature: 0.7,
-            topK: 40,
-            topP: 0.95,
-            maxOutputTokens: 2048,
-          },
-          safetySettings: [
-            {
-              category: "HARM_CATEGORY_HARASSMENT",
-              threshold: "BLOCK_MEDIUM_AND_ABOVE"
-            },
-            {
-              category: "HARM_CATEGORY_HATE_SPEECH",
-              threshold: "BLOCK_MEDIUM_AND_ABOVE"
-            },
-            {
-              category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-              threshold: "BLOCK_MEDIUM_AND_ABOVE"
-            },
-            {
-              category: "HARM_CATEGORY_DANGEROUS_CONTENT",
-              threshold: "BLOCK_MEDIUM_AND_ABOVE"
-            }
-          ]
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json'
+      const response = await this.client.messages.create({
+        model: this.model,
+        max_tokens: 2048,
+        messages: [
+          {
+            role: 'user',
+            content: prompt
           }
-        }
-      );
-
-      logger.info('Google AI analysis completed', {
-        query: searchQuery,
-        responseLength: response.data.candidates[0].content.parts[0].text.length
+        ]
       });
 
-      // Parse the response and structure it
-      return this.parseGoogleResponse(response.data.candidates[0].content.parts[0].text, searchQuery, searchType);
+      const responseText = response.content[0].text;
+
+      logger.info('Claude AI analysis completed', {
+        query: searchQuery,
+        responseLength: responseText.length
+      });
+
+      return this.parseClaudeResponse(responseText, searchQuery, searchType);
 
     } catch (error) {
-      logger.error('Google AI analysis failed', {
+      logger.error('Claude AI analysis failed', {
         error: error.message,
-        statusCode: error.response?.status,
-        statusText: error.response?.statusText,
-        responseData: error.response?.data,
+        statusCode: error.status,
         query: searchQuery,
         type: searchType
       });
 
-      // Return fallback analysis if Google AI fails
       return this.getFallbackAnalysis(searchQuery, searchType);
     }
   }
@@ -114,9 +75,9 @@ Required JSON format:
   "simpleSummary": "One sentence summary that anyone can understand"
 }
 
-IMPORTANT: 
+IMPORTANT:
 - Use simple words like "good for you" instead of "beneficial"
-- Use "bad for you" instead of "detrimental" 
+- Use "bad for you" instead of "detrimental"
 - Use "energy" instead of "calories" when talking to users
 - Use "sugar" instead of "glucose"
 - Use "salt" instead of "sodium"
@@ -126,15 +87,13 @@ IMPORTANT:
 - The JSON must be valid and parseable
 - Start response with { and end with }`;
 
-    // Add user-specific health context if available
     if (userProfile) {
       prompt += `\n\nPERSONALIZED HEALTH CONTEXT:
-      
+
 IMPORTANT: Consider this user's specific health situation when analyzing the food. Make your recommendations personal and relevant to their health needs.
 
 HEALTH CONDITIONS:`;
-      
-      // Add health conditions
+
       if (userProfile.healthConditions) {
         if (userProfile.healthConditions.diabetes?.type) {
           prompt += `\n- Diabetes (${userProfile.healthConditions.diabetes.type}): ${userProfile.healthConditions.diabetes.severity} severity`;
@@ -159,7 +118,6 @@ HEALTH CONDITIONS:`;
         }
       }
 
-      // Add allergies
       if (userProfile.allergies?.food?.length > 0) {
         prompt += `\n\nFOOD ALLERGIES:`;
         userProfile.allergies.food.forEach(allergy => {
@@ -167,7 +125,6 @@ HEALTH CONDITIONS:`;
         });
       }
 
-      // Add dietary restrictions
       if (userProfile.dietaryRestrictions) {
         const restrictions = [];
         if (userProfile.dietaryRestrictions.vegetarian) restrictions.push('Vegetarian');
@@ -178,13 +135,12 @@ HEALTH CONDITIONS:`;
         if (userProfile.dietaryRestrictions.lowSugar) restrictions.push('Low Sugar');
         if (userProfile.dietaryRestrictions.glutenFree) restrictions.push('Gluten Free');
         if (userProfile.dietaryRestrictions.dairyFree) restrictions.push('Dairy Free');
-        
+
         if (restrictions.length > 0) {
           prompt += `\n\nDIETARY RESTRICTIONS: ${restrictions.join(', ')}`;
         }
       }
 
-      // Add health goals
       if (userProfile.healthGoals) {
         prompt += `\n\nHEALTH GOALS:`;
         if (userProfile.healthGoals.weightManagement?.goal) {
@@ -198,7 +154,6 @@ HEALTH CONDITIONS:`;
         }
       }
 
-      // Add medications
       if (userProfile.medications?.length > 0) {
         prompt += `\n\nCURRENT MEDICATIONS:`;
         userProfile.medications.forEach(med => {
@@ -219,17 +174,15 @@ HEALTH CONDITIONS:`;
     return prompt;
   }
 
-  parseGoogleResponse(responseText, searchQuery, searchType) {
+  parseClaudeResponse(responseText, searchQuery, searchType) {
     try {
-      // Clean the response text first
       let cleanText = responseText.trim();
-      
+
       // Remove markdown code blocks if present
       if (cleanText.startsWith('```json') || cleanText.startsWith('```')) {
         cleanText = cleanText.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
       }
-      
-      // Try to parse the entire cleaned text as JSON first
+
       try {
         const parsed = JSON.parse(cleanText);
         return this.normalizeAnalysisResponse({
@@ -244,24 +197,19 @@ HEALTH CONDITIONS:`;
           rawResponse: responseText
         });
       } catch (parseError) {
-        // If direct parsing fails, try to extract and complete JSON from the response
         const jsonMatch = cleanText.match(/\{[\s\S]*/);
         if (jsonMatch) {
           let jsonText = jsonMatch[0];
-          
-          // Try to complete incomplete JSON
+
           if (!jsonText.endsWith('}')) {
-            // Count open braces and close them
             const openBraces = (jsonText.match(/\{/g) || []).length;
             const closeBraces = (jsonText.match(/\}/g) || []).length;
             const missingBraces = openBraces - closeBraces;
-            
-            // Add missing closing braces
             for (let i = 0; i < missingBraces; i++) {
               jsonText += '}';
             }
           }
-          
+
           try {
             const parsed = JSON.parse(jsonText);
             return this.normalizeAnalysisResponse({
@@ -276,16 +224,14 @@ HEALTH CONDITIONS:`;
               rawResponse: responseText
             });
           } catch (completionError) {
-            // If completion fails, fall back to text parsing
             return this.parseTextResponse(responseText, searchQuery, searchType);
           }
         } else {
-          // If no JSON found, create structured response from text
           return this.parseTextResponse(responseText, searchQuery, searchType);
         }
       }
     } catch (error) {
-      logger.error('Failed to parse Google AI response', {
+      logger.error('Failed to parse Claude AI response', {
         error: error.message,
         responseText: responseText.substring(0, 200)
       });
@@ -294,7 +240,6 @@ HEALTH CONDITIONS:`;
   }
 
   normalizeAnalysisResponse(analysis) {
-    // Ensure all required fields exist with proper types
     return {
       healthImpact: this.normalizeHealthImpact(analysis.healthImpact),
       score: this.normalizeScore(analysis.score),
@@ -346,13 +291,9 @@ HEALTH CONDITIONS:`;
   }
 
   parseTextResponse(responseText, searchQuery, searchType) {
-    // Extract key information from text response
-    const analysis = responseText;
-    const recommendations = [];
     const warnings = [];
     const benefits = [];
 
-    // Simple keyword-based parsing for user-friendly language
     if (responseText.toLowerCase().includes('good for you') || responseText.toLowerCase().includes('healthy')) {
       benefits.push('Good for your health');
     }
@@ -372,9 +313,9 @@ HEALTH CONDITIONS:`;
     return this.normalizeAnalysisResponse({
       healthImpact: 'neutral',
       score: 60,
-      analysis: analysis,
-      recommendations: recommendations.length > 0 ? recommendations : ['Eat in normal portions', 'Balance with other healthy foods'],
-      warnings: warnings,
+      analysis: responseText,
+      recommendations: ['Eat in normal portions', 'Balance with other healthy foods'],
+      warnings,
       benefits: benefits.length > 0 ? benefits : ['Contains nutrients your body needs'],
       simpleSummary: `Basic info about ${searchQuery} - check the full analysis for details.`,
       rawResponse: responseText,
@@ -385,7 +326,7 @@ HEALTH CONDITIONS:`;
 
   getFallbackAnalysis(searchQuery, searchType) {
     logger.warn('Using fallback analysis', { query: searchQuery, type: searchType });
-    
+
     return this.normalizeAnalysisResponse({
       healthImpact: 'neutral',
       score: 50,
@@ -407,9 +348,9 @@ HEALTH CONDITIONS:`;
       },
       simpleSummary: 'This food gives you energy and nutrients, but we need more info for better advice.',
       isFallback: true,
-      fallbackReason: 'Google AI service unavailable'
+      fallbackReason: 'Claude AI service unavailable'
     });
   }
 }
 
-module.exports = new GoogleAIService();
+module.exports = new ClaudeAIService();
