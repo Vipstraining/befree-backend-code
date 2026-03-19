@@ -53,7 +53,55 @@ class ClaudeAIService {
   }
 
   createAnalysisPrompt(searchQuery, searchType, userProfile) {
-    let prompt = `You are a friendly nutrition expert. Analyze this food item: "${searchQuery}" (${searchType})
+    let prompt;
+
+    if (searchType === 'barcode') {
+      prompt = `You are a friendly nutrition expert with access to product knowledge from your training data.
+
+A user scanned a barcode: "${searchQuery}"
+
+STEP 1 — IDENTIFY THE PRODUCT:
+Use your knowledge to identify this barcode. Many major brand products have well-known barcodes (e.g., Coca-Cola, Lay's, Quaker Oats, etc.). If you recognize the barcode, name the exact product. If you do not recognize it, make a reasonable educated guess based on any partial knowledge, or state it as "Unknown product (barcode: ${searchQuery})".
+
+STEP 2 — ANALYZE THE PRODUCT:
+Once identified, provide a full, detailed nutritional and health analysis of that product. Be specific — mention the actual product name, brand, and what it contains.
+
+CRITICAL: Return ONLY a valid JSON object. Do NOT wrap it in markdown code blocks. Start directly with { and end with }.
+
+Required JSON format:
+{
+  "productInfo": {
+    "name": "Exact product name (e.g. 'Coca-Cola Classic 355ml Can')",
+    "brand": "Brand name (e.g. 'The Coca-Cola Company')",
+    "category": "Product category (e.g. 'Carbonated Soft Drink')",
+    "barcode": "${searchQuery}",
+    "servingSize": "Typical serving size (e.g. '355ml / 1 can')",
+    "identified": true or false
+  },
+  "healthImpact": "positive|negative|neutral|caution",
+  "score": 0-100,
+  "analysis": "2-3 sentence friendly explanation of what this specific product is and how it affects your health. Mention the product name. Use everyday language like talking to a friend.",
+  "recommendations": ["Specific practical advice for this product, e.g. 'Limit to one can per day due to high sugar content'"],
+  "warnings": ["Specific warnings for this product, e.g. 'Contains 39g of sugar per can — that's almost 10 teaspoons!'"],
+  "benefits": ["Any genuine benefits, e.g. 'Provides quick energy' — be honest if there are few benefits"],
+  "nutritionalFacts": {
+    "calories": "Actual calorie info for this product, e.g. 'About 140 calories per can'",
+    "macros": "Actual macro breakdown, e.g. '39g sugar, 0g fat, 0g protein'",
+    "keyNutrients": ["Any notable nutrients, vitamins, or minerals in this product"]
+  },
+  "simpleSummary": "One honest sentence summary about this specific product"
+}
+
+RULES:
+- Always populate "productInfo" — never leave it empty
+- If barcode is unrecognized, set "identified": false and use your best guess for the product or describe it as unknown
+- Use the actual product name throughout the analysis (not just "this food")
+- Use simple words: "sugar" not "glucose", "salt" not "sodium", "energy" not "calories" in explanations
+- Be honest — if it's junk food, say so kindly
+- Return ONLY the JSON object, no markdown, no extra text
+- Start response with { and end with }`;
+    } else {
+      prompt = `You are a friendly nutrition expert. Analyze this food item: "${searchQuery}" (${searchType})
 
 Write your analysis in SIMPLE, EASY-TO-UNDERSTAND language that any normal person can read and understand. Avoid technical jargon and medical terms. Use everyday words.
 
@@ -86,6 +134,7 @@ IMPORTANT:
 - Return ONLY the JSON object, no markdown formatting, no code blocks, no extra text
 - The JSON must be valid and parseable
 - Start response with { and end with }`;
+    }
 
     if (userProfile) {
       prompt += `\n\nPERSONALIZED HEALTH CONTEXT:
@@ -186,6 +235,7 @@ HEALTH CONDITIONS:`;
       try {
         const parsed = JSON.parse(cleanText);
         return this.normalizeAnalysisResponse({
+          productInfo: parsed.productInfo || null,
           healthImpact: parsed.healthImpact || 'neutral',
           score: parsed.score || 50,
           analysis: parsed.analysis || 'Analysis not available',
@@ -213,6 +263,7 @@ HEALTH CONDITIONS:`;
           try {
             const parsed = JSON.parse(jsonText);
             return this.normalizeAnalysisResponse({
+              productInfo: parsed.productInfo || null,
               healthImpact: parsed.healthImpact || 'neutral',
               score: parsed.score || 50,
               analysis: parsed.analysis || 'Analysis not available',
@@ -240,7 +291,7 @@ HEALTH CONDITIONS:`;
   }
 
   normalizeAnalysisResponse(analysis) {
-    return {
+    const result = {
       healthImpact: this.normalizeHealthImpact(analysis.healthImpact),
       score: this.normalizeScore(analysis.score),
       analysis: this.normalizeText(analysis.analysis),
@@ -253,6 +304,19 @@ HEALTH CONDITIONS:`;
       fallbackReason: analysis.fallbackReason || null,
       rawResponse: analysis.rawResponse || null
     };
+
+    if (analysis.productInfo) {
+      result.productInfo = {
+        name: analysis.productInfo.name || 'Unknown Product',
+        brand: analysis.productInfo.brand || 'Unknown Brand',
+        category: analysis.productInfo.category || 'Unknown Category',
+        barcode: analysis.productInfo.barcode || null,
+        servingSize: analysis.productInfo.servingSize || 'Not specified',
+        identified: analysis.productInfo.identified === true
+      };
+    }
+
+    return result;
   }
 
   normalizeHealthImpact(healthImpact) {
