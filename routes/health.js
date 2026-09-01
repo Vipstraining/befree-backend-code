@@ -4,6 +4,17 @@ const HealthProfile = require('../models/HealthProfile');
 const auth = require('../middleware/auth');
 const logger = require('../config/logger');
 
+// Convert a Mongoose ValidationError — including subdocument cast failures, e.g.
+// allergies.food sent as an array of strings instead of {allergen, severity, ...}
+// objects — into the same {field, message} shape validateHealthProfile() below
+// returns, so malformed input is a 400 instead of falling through to a 500.
+const formatMongooseValidationError = (error) => {
+  return Object.keys(error.errors).map(key => ({
+    field: key,
+    message: error.errors[key].message
+  }));
+};
+
 // Validation helper
 const validateHealthProfile = (data) => {
   const errors = [];
@@ -129,12 +140,25 @@ router.post('/', auth, async (req, res) => {
       });
     }
   } catch (error) {
+    if (error.name === 'ValidationError') {
+      logger.warn('Health profile validation failed', {
+        error: error.message,
+        userId: req.user.id
+      });
+
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid health profile data',
+        errors: formatMongooseValidationError(error)
+      });
+    }
+
     logger.error('Health profile operation failed', {
       error: error.message,
       userId: req.user.id,
       stack: error.stack
     });
-    
+
     res.status(500).json({
       success: false,
       message: 'Internal server error',
@@ -237,12 +261,25 @@ router.put('/', auth, async (req, res) => {
       profile: healthProfile
     });
   } catch (error) {
+    if (error.name === 'ValidationError') {
+      logger.warn('Health profile validation failed', {
+        error: error.message,
+        userId: req.user.id
+      });
+
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid health profile data',
+        errors: formatMongooseValidationError(error)
+      });
+    }
+
     logger.error('Health profile update failed', {
       error: error.message,
       userId: req.user.id,
       stack: error.stack
     });
-    
+
     res.status(500).json({
       success: false,
       message: 'Internal server error',

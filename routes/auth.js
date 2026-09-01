@@ -3,6 +3,9 @@ const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const User = require('../models/User');
 const Session = require('../models/Session');
+const UserProfile = require('../models/UserProfile');
+const HealthProfile = require('../models/HealthProfile');
+const SearchHistory = require('../models/SearchHistory');
 const { registerLimiter } = require('../middleware/rateLimiter');
 const auth = require('../middleware/auth');
 const logger = require('../config/logger');
@@ -436,8 +439,12 @@ router.post('/logout', auth, async (req, res) => {
   try {
     const session = req.session;
 
-    // Only invalidate the session for this device
+    // Only invalidate the session for this device. Also drop the push token —
+    // an inactive session otherwise keeps it until the TTL expiry (up to
+    // 120h), which is dead weight now and a real bug the day push sending
+    // gets built, if that code doesn't also check isActive.
     session.isActive = false;
+    session.pushToken = null;
     await session.save();
 
     logger.info('✅ LOGOUT SUCCESSFUL', {
@@ -455,6 +462,110 @@ router.post('/logout', auth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server error during logout'
+    });
+  }
+});
+
+// @route   PUT /api/auth/push-token
+// @desc    Register (or clear) the FCM token for the calling device
+// @access  Private
+//
+// Stored on the session, not the user: push delivery is per-device, and the
+// session row is already the per-(user, device) record. Called by the web
+// layer after it receives the `befree:pushToken` event from the native
+// bridge — the shells never talk to `/api/*` directly (see STORE_COMPLIANCE
+// §5: "push tokens are registered by the web layer, not the shell").
+router.put('/push-token', auth, [
+  body('token')
+    .optional({ nullable: true })
+    .isString()
+    .isLength({ max: 4096 })
+    .withMessage('token must be a string')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, message: errors.array()[0].msg });
+  }
+
+  try {
+    req.session.pushToken = req.body.token || null;
+    await req.session.save();
+
+    res.json({ success: true, message: 'Push token updated' });
+  } catch (error) {
+    logger.error('❌ PUSH TOKEN UPDATE ERROR', {
+      userId: req.user._id,
+      error: error.message,
+      stack: error.stack
+    });
+    res.status(500).json({ success: false, message: 'Server error updating push token' });
+  }
+});
+
+// @route   DELETE /api/auth/account
+// @desc    Permanently delete the account and all personal data
+// @access  Private
+//
+// Required by App Store Review Guideline 5.1.1(v): any app offering account
+// creation must offer in-app account deletion. Apple is explicit that
+// deactivating or disabling an account does NOT satisfy this — the account and
+// its personal data must actually be removed. Google Play carries an equivalent
+// requirement via its Data deletion policy.
+//
+// Deletion is irreversible by design. The client is responsible for confirming
+// intent before calling this; the native shells show a system confirmation
+// dialog (BridgeHost.confirmAccountDeletion) and wipe local state afterwards.
+router.delete('/account', auth, async (req, res) => {
+  const userId = req.user._id;
+
+  try {
+    // Ordering matters. Sessions go last: while they exist the token still
+    // authenticates, so if a later step fails the user can retry. Deleting
+    // sessions first would lock them out of an account that still holds their
+    // health data — the worst possible partial-failure state.
+    const [profiles, healthProfiles, searches] = await Promise.all([
+      UserProfile.deleteMany({ userId }),
+      HealthProfile.deleteMany({ userId }),
+      SearchHistory.deleteMany({ userId })
+    ]);
+
+    const sessions = await Session.deleteMany({ userId });
+    const user = await User.deleteOne({ _id: userId });
+
+    if (user.deletedCount === 0) {
+      logger.warn('⚠️ DELETE ACCOUNT — user already gone', { userId });
+    }
+
+    // Deliberately logs counts only. Writing the deleted email or profile
+    // contents into the log would defeat the point of the deletion.
+    logger.info('✅ ACCOUNT DELETED', {
+      userId,
+      deleted: {
+        user: user.deletedCount,
+        profiles: profiles.deletedCount,
+        healthProfiles: healthProfiles.deletedCount,
+        searches: searches.deletedCount,
+        sessions: sessions.deletedCount
+      }
+    });
+
+    res.json({
+      success: true,
+      message: 'Your account and all associated data have been permanently deleted'
+    });
+  } catch (error) {
+    logger.error('❌ DELETE ACCOUNT ERROR', {
+      userId,
+      error: error.message,
+      stack: error.stack
+    });
+    // Not claiming "nothing was deleted" — a failure partway through means some
+    // records are already gone. The account survives (the User document is
+    // removed last), so the safe and honest instruction is to retry, which is
+    // idempotent: deleteMany on already-empty sets is a no-op.
+    res.status(500).json({
+      success: false,
+      message: 'Server error deleting account. Your account still exists — please try again.'
     });
   }
 });

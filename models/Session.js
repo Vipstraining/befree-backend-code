@@ -33,6 +33,16 @@ const SessionSchema = new mongoose.Schema({
   lastUsedAt: {
     type: Date,
     default: Date.now
+  },
+  // FCM token for this device, registered by the native shells over the
+  // BeFree bridge (see routes/auth.js PUT /push-token). Lives on the session
+  // rather than the user because push delivery is per-device, and this record
+  // is already the per-(user, device) row — no separate table needed. Cleared
+  // automatically when the session is deleted (logout, expiry, or account
+  // deletion, which removes sessions last — see DELETE /account).
+  pushToken: {
+    type: String,
+    default: null
   }
 }, {
   timestamps: true
