@@ -77,8 +77,12 @@ const createLogger = () => {
     if (levels[level] <= currentLevel) {
       const formattedMessage = formatMessage(level, message, meta);
       
-      // Always write to console in development
-      if (config.NODE_ENV === 'development') {
+      // Errors and warnings always go to console too, not just development —
+      // pm2/CloudWatch/any process-manager log capture reads stdout/stderr,
+      // not this app's own log file. Restricting console output to dev meant
+      // every logger.error() call in production (e.g. DELETE /account's
+      // failure) was invisible to `pm2 logs`, sitting only in logs/prod.log.
+      if (config.NODE_ENV === 'development' || level === 'error' || level === 'warn') {
         writeToConsole(level, formattedMessage);
       }
       
