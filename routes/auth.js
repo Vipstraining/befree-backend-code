@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const User = require('../models/User');
@@ -15,9 +16,11 @@ const router = express.Router();
 // JWT carries userId + sessionId — 30d so the token itself never expires
 // before the rolling session does (session DB is the real gate)
 const generateToken = (userId, sessionId) => {
+  // No hardcoded fallback — see middleware/auth.js for why: validateConfig()
+  // already guarantees JWT_SECRET is set before any request is served.
   return jwt.sign(
     { id: userId, sessionId },
-    process.env.JWT_SECRET || 'dev_jwt_secret_key_change_in_production',
+    process.env.JWT_SECRET,
     { expiresIn: '30d' }
   );
 };
@@ -476,11 +479,14 @@ router.post('/logout', auth, async (req, res) => {
 // bridge — the shells never talk to `/api/*` directly (see STORE_COMPLIANCE
 // §5: "push tokens are registered by the web layer, not the shell").
 router.put('/push-token', auth, [
+  // min: 1 rejects '' explicitly — optional({nullable:true}) only skips
+  // undefined/null, so an empty string would otherwise sail through and
+  // silently clear a working token (`'' || null` below) with no error signal.
   body('token')
     .optional({ nullable: true })
     .isString()
-    .isLength({ max: 4096 })
-    .withMessage('token must be a string')
+    .isLength({ min: 1, max: 4096 })
+    .withMessage('token must be a non-empty string up to 4096 characters')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -488,8 +494,23 @@ router.put('/push-token', auth, [
   }
 
   try {
-    req.session.pushToken = req.body.token || null;
-    await req.session.save();
+    // Atomic update instead of load-mutate-save: if a concurrent request
+    // (e.g. DELETE /account on another device) deleted this session in
+    // between, findByIdAndUpdate returns null instead of `save()`'s
+    // silent no-op success on a document that's no longer in the collection.
+    const updatedSession = await Session.findByIdAndUpdate(
+      req.session._id,
+      { pushToken: req.body.token ?? null },
+      { new: true }
+    );
+
+    if (!updatedSession) {
+      return res.status(401).json({
+        success: false,
+        message: 'Session no longer exists — please log in again',
+        error: 'SESSION_NOT_FOUND'
+      });
+    }
 
     res.json({ success: true, message: 'Push token updated' });
   } catch (error) {
@@ -518,19 +539,37 @@ router.put('/push-token', auth, [
 router.delete('/account', auth, async (req, res) => {
   const userId = req.user._id;
 
-  try {
-    // Ordering matters. Sessions go last: while they exist the token still
-    // authenticates, so if a later step fails the user can retry. Deleting
-    // sessions first would lock them out of an account that still holds their
-    // health data — the worst possible partial-failure state.
-    const [profiles, healthProfiles, searches] = await Promise.all([
-      UserProfile.deleteMany({ userId }),
-      HealthProfile.deleteMany({ userId }),
-      SearchHistory.deleteMany({ userId })
-    ]);
+  // Every delete below runs in one transaction: either the whole cascade
+  // commits or none of it does, so a mid-cascade failure (crash, network
+  // blip) can never leave the account active with its profile/health/search
+  // data silently gone — the previous non-transactional version could.
+  //
+  // Ordering within the transaction still matters for a *pre-commit* error
+  // path (e.g. a validation throw before commit): User goes before Session,
+  // so if something fails before we reach the transaction's commit, the
+  // session — and thus the caller's still-valid token — was never touched
+  // and the retry path stays simple. (With a transaction this mostly matters
+  // for readability/intent, not correctness, since a partial failure here
+  // aborts the whole transaction rather than leaving a partial state.)
+  const dbSession = await mongoose.startSession();
+  let profiles, healthProfiles, searches, user, sessions;
 
-    const sessions = await Session.deleteMany({ userId });
-    const user = await User.deleteOne({ _id: userId });
+  try {
+    await dbSession.withTransaction(async () => {
+      // This list is hardcoded and NOT enforced anywhere — if a new
+      // user-scoped collection is added to models/ later, it must be added
+      // here too, or this route will keep reporting success while silently
+      // leaving that collection's data behind (a 5.1.1(v)/data-deletion
+      // compliance regression, not just a bug).
+      [profiles, healthProfiles, searches] = await Promise.all([
+        UserProfile.deleteMany({ userId }, { session: dbSession }),
+        HealthProfile.deleteMany({ userId }, { session: dbSession }),
+        SearchHistory.deleteMany({ userId }, { session: dbSession })
+      ]);
+
+      user = await User.deleteOne({ _id: userId }, { session: dbSession });
+      sessions = await Session.deleteMany({ userId }, { session: dbSession });
+    });
 
     if (user.deletedCount === 0) {
       logger.warn('⚠️ DELETE ACCOUNT — user already gone', { userId });
@@ -559,14 +598,15 @@ router.delete('/account', auth, async (req, res) => {
       error: error.message,
       stack: error.stack
     });
-    // Not claiming "nothing was deleted" — a failure partway through means some
-    // records are already gone. The account survives (the User document is
-    // removed last), so the safe and honest instruction is to retry, which is
-    // idempotent: deleteMany on already-empty sets is a no-op.
+    // The transaction guarantees an all-or-nothing outcome, so on any error
+    // here nothing was deleted — the account and all its data survive intact,
+    // and retrying is safe.
     res.status(500).json({
       success: false,
       message: 'Server error deleting account. Your account still exists — please try again.'
     });
+  } finally {
+    await dbSession.endSession();
   }
 });
 

@@ -1,0 +1,13 @@
+node_modules/
+
+# Environment files — real secrets belong only in the host's env, never in git.
+# (.env was previously tracked; this stops it going forward, but rotate every
+# credential it ever held — untracking does not undo an already-pushed leak.)
+.env
+.env.*
+!.env.example
+
+logs/
+*.log
+
+uploads/

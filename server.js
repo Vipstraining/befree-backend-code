@@ -154,7 +154,13 @@ app.use(cors({
       return callback(null, true);
     } else {
       logger.warn('CORS blocked', { origin, allowedOrigins: corsOrigins });
-      return callback(new Error('Not allowed by CORS'));
+      // statusCode set explicitly: without it this error has no statusCode,
+      // so errorHandler.js's `error.statusCode || 500` default turns a
+      // disallowed-origin preflight into a 500 — a false "server crash" in
+      // any 5xx-based monitoring, when the correct response is 403.
+      const corsError = new Error('Not allowed by CORS');
+      corsError.statusCode = 403;
+      return callback(corsError);
     }
   },
   credentials: true,

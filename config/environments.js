@@ -5,16 +5,19 @@ const environments = {
   development: {
     NODE_ENV: 'development',
     PORT: 3000,
-    MONGODB_URI: 'mongodb+srv://befree_master:yEjXZEhIUCAn8ocF@lifecircle.k8sgfs4.mongodb.net/befree-sep?retryWrites=true&w=majority',
+    // No hardcoded fallback — set MONGODB_URI in your local .env (untracked,
+    // never commit it). validateConfig() below fails loudly at startup if
+    // it's missing, instead of silently falling back to a shared credential.
+    MONGODB_URI: process.env.MONGODB_URI,
     DB_NAME: 'befree-sep',
-    
+
     // API Endpoints
     API_BASE_URL: 'http://localhost:3000',
     FRONTEND_URL: 'http://localhost:3000',
-    
+
     // External APIs
     CLAUDE_API_BASE_URL: 'https://api.anthropic.com',
-    CLAUDE_API_KEY: process.env.CLAUDE_API_KEY || 'your_claude_api_key_here',
+    CLAUDE_API_KEY: process.env.CLAUDE_API_KEY,
     CLAUDE_MODEL: 'claude-3-sonnet-20240229',
     
     // CORS Configuration
@@ -47,7 +50,7 @@ const environments = {
     LOG_FILE: 'logs/dev.log',
     
     // Security (less strict for dev)
-    JWT_SECRET: process.env.JWT_SECRET || 'dev_jwt_secret_key_change_in_production',
+    JWT_SECRET: process.env.JWT_SECRET,
     JWT_EXPIRE: '7d',
     BCRYPT_ROUNDS: 10,
     
@@ -62,15 +65,20 @@ const environments = {
   production: {
     NODE_ENV: 'production',
     PORT: process.env.PORT || 3000,
-    MONGODB_URI: 'mongodb+srv://befree_master:yEjXZEhIUCAn8ocF@lifecircle.k8sgfs4.mongodb.net/befree-sep?retryWrites=true&w=majority',
+    // No hardcoded fallback — must be set on the host. Previously this was a
+    // live Atlas connection string committed in source; that credential must
+    // be rotated regardless of this edit (untracking/removing it from new
+    // commits does not undo an already-pushed leak).
+    MONGODB_URI: process.env.MONGODB_URI,
     DB_NAME: 'befree-sep',
-    
+
     // API Endpoints
     API_BASE_URL: process.env.API_BASE_URL || 'https://api.befree.fit',
     FRONTEND_URL: process.env.FRONTEND_URL || 'https://beta.befree.fit',
-    
+
     // External APIs
     CLAUDE_API_BASE_URL: 'https://api.anthropic.com',
+    CLAUDE_API_KEY: process.env.CLAUDE_API_KEY,
     CLAUDE_MODEL: 'claude-3-sonnet-20240229',
     
     // CORS Configuration (restrictive for prod)
@@ -90,6 +98,11 @@ const environments = {
     LOG_FILE: 'logs/prod.log',
     
     // Security (strict for prod)
+    // JWT_SECRET was previously absent from this block entirely — getConfig()'s
+    // override loop only applies process.env for keys the base config object
+    // already has, so setting the env var alone would silently NOT have taken
+    // effect here before this fix.
+    JWT_SECRET: process.env.JWT_SECRET,
     JWT_EXPIRE: '24h',
     BCRYPT_ROUNDS: 12,
     
@@ -104,15 +117,18 @@ const environments = {
   staging: {
     NODE_ENV: 'staging',
     PORT: process.env.PORT || 3001,
-    MONGODB_URI: 'mongodb+srv://befree_master:yEjXZEhIUCAn8ocF@lifecircle.k8sgfs4.mongodb.net/befree-sep?retryWrites=true&w=majority',
+    // No hardcoded fallback — see the production block's comment above; same
+    // credential, same rotation requirement.
+    MONGODB_URI: process.env.MONGODB_URI,
     DB_NAME: 'befree-sep-staging',
-    
+
     // API Endpoints
     API_BASE_URL: process.env.API_BASE_URL || 'https://staging-api.befree.fit',
     FRONTEND_URL: process.env.FRONTEND_URL || 'https://staging.befree.fit',
-    
+
     // External APIs
     CLAUDE_API_BASE_URL: 'https://api.anthropic.com',
+    CLAUDE_API_KEY: process.env.CLAUDE_API_KEY,
     CLAUDE_MODEL: 'claude-3-sonnet-20240229',
     
     // CORS Configuration
@@ -134,6 +150,7 @@ const environments = {
     LOG_FILE: 'logs/staging.log',
     
     // Security
+    JWT_SECRET: process.env.JWT_SECRET,
     JWT_EXPIRE: '7d',
     BCRYPT_ROUNDS: 11,
     

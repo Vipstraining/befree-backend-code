@@ -37,9 +37,15 @@ const SessionSchema = new mongoose.Schema({
   // FCM token for this device, registered by the native shells over the
   // BeFree bridge (see routes/auth.js PUT /push-token). Lives on the session
   // rather than the user because push delivery is per-device, and this record
-  // is already the per-(user, device) row — no separate table needed. Cleared
-  // automatically when the session is deleted (logout, expiry, or account
-  // deletion, which removes sessions last — see DELETE /account).
+  // is already the per-(user, device) row — no separate table needed.
+  //
+  // NOT cleared automatically — logout soft-invalidates the session
+  // (isActive=false) rather than deleting it, so POST /logout explicitly
+  // sets pushToken=null itself. A new session-scoped field added the same
+  // way as this one needs its own explicit reset in that route too; don't
+  // assume "the session goes away" handles it. DELETE /account does
+  // hard-delete the Session doc (which does clear this), but that's the
+  // exception, not the general case.
   pushToken: {
     type: String,
     default: null

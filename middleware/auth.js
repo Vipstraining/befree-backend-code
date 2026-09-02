@@ -23,7 +23,11 @@ const auth = async (req, res, next) => {
     // b+c. Verify JWT signature and check expiry
     let decoded;
     try {
-      decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev_jwt_secret_key_change_in_production');
+      // No hardcoded fallback: validateConfig() in server.js already exits the
+      // process at startup if JWT_SECRET is unset, so by the time a request
+      // reaches here it's guaranteed to be set — a fallback string here would
+      // just be a public, guessable signing key sitting in the repo.
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
     } catch (err) {
       if (err.name === 'TokenExpiredError') {
         logger.warn('Token expired', { error: err.message });
