@@ -42,6 +42,26 @@ const userSchema = new mongoose.Schema({
   },
   lastLogin: {
     type: Date
+  },
+  // Password reset — a bcrypt hash of the emailed 6-digit code, never the
+  // raw code itself (same treatment as the password field). select: false
+  // so it isn't returned by default queries; reset-password explicitly
+  // opts in with .select('+resetCodeHash').
+  resetCodeHash: {
+    type: String,
+    default: null,
+    select: false
+  },
+  resetCodeExpiresAt: {
+    type: Date,
+    default: null
+  },
+  // Wrong-code attempts against the current reset code. Reset (and the code
+  // invalidated) once it hits the lockout threshold in routes/auth.js, so a
+  // 6-digit code can't be brute-forced (1M combinations without a limit).
+  resetCodeAttempts: {
+    type: Number,
+    default: 0
   }
 }, {
   timestamps: true

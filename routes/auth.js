@@ -1,15 +1,27 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const { body, validationResult } = require('express-validator');
 const User = require('../models/User');
 const Session = require('../models/Session');
 const UserProfile = require('../models/UserProfile');
 const HealthProfile = require('../models/HealthProfile');
 const SearchHistory = require('../models/SearchHistory');
-const { registerLimiter } = require('../middleware/rateLimiter');
+const { registerLimiter, forgotPasswordLimiter } = require('../middleware/rateLimiter');
 const auth = require('../middleware/auth');
 const logger = require('../config/logger');
+const emailService = require('../services/emailService');
+
+// Case-insensitive exact-match email lookup, matching the pattern already
+// used by /register and /login.
+const findUserByEmail = (email) => User.findOne({
+  email: { $regex: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+});
+
+const RESET_CODE_TTL_MS = 20 * 60 * 1000; // 20 minutes
+const RESET_CODE_MAX_ATTEMPTS = 5;
 
 const router = express.Router();
 
@@ -465,6 +477,175 @@ router.post('/logout', auth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server error during logout'
+    });
+  }
+});
+
+// @route   POST /api/auth/forgot-password
+// @desc    Email a 6-digit reset code, if the address has an account
+// @access  Public
+//
+// Always returns the same generic success response whether or not the email
+// exists — the standard defense against account enumeration. Every failure
+// path (unknown email, email-send failure) still returns 200, and only
+// success/failure that's genuinely the caller's fault (bad request shape)
+// gets a different status code.
+router.post('/forgot-password', forgotPasswordLimiter, [
+  body('email')
+    .isEmail()
+    .withMessage('Please provide a valid email')
+    .trim()
+    .normalizeEmail({ all_lowercase: true, gmail_remove_dots: false })
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      message: 'Validation failed',
+      errors: errors.array().map(e => ({ field: e.path || e.param, message: e.msg }))
+    });
+  }
+
+  const email = req.body.email.toLowerCase().trim();
+
+  try {
+    const user = await findUserByEmail(email);
+
+    if (user) {
+      const code = crypto.randomInt(0, 1000000).toString().padStart(6, '0');
+      user.resetCodeHash = await bcrypt.hash(code, 10);
+      user.resetCodeExpiresAt = new Date(Date.now() + RESET_CODE_TTL_MS);
+      user.resetCodeAttempts = 0;
+      await user.save();
+
+      try {
+        await emailService.sendPasswordResetEmail(user.email, code);
+        logger.info('✅ PASSWORD RESET EMAIL SENT', { userId: user._id });
+      } catch (emailError) {
+        // Don't surface this to the client — same generic response either
+        // way, so a send failure doesn't leak "this email exists" either.
+        logger.error('❌ PASSWORD RESET EMAIL FAILED', {
+          userId: user._id,
+          error: emailError.message
+        });
+      }
+    } else {
+      logger.info('Password reset requested for unregistered email');
+    }
+
+    res.json({
+      success: true,
+      message: 'If that email exists, a reset code has been sent.'
+    });
+  } catch (error) {
+    logger.error('❌ FORGOT PASSWORD ERROR', { error: error.message, stack: error.stack });
+    // Deliberately still a generic-shaped response, just a 500 — a genuine
+    // server error, not a validation/enumeration concern.
+    res.status(500).json({
+      success: false,
+      message: 'Server error processing request'
+    });
+  }
+});
+
+// @route   POST /api/auth/reset-password
+// @desc    Consume a reset code, set a new password, invalidate all sessions
+// @access  Public
+//
+// Every rejection path (unknown email, no active code, expired, too many
+// wrong attempts, wrong code) returns the identical "Invalid or expired
+// reset code" message — distinguishing them would tell an attacker which
+// half of email+code they got right.
+router.post('/reset-password', [
+  body('email')
+    .isEmail()
+    .withMessage('Please provide a valid email')
+    .trim()
+    .normalizeEmail({ all_lowercase: true, gmail_remove_dots: false }),
+  body('code')
+    .notEmpty()
+    .withMessage('code is required')
+    .isLength({ min: 6, max: 6 })
+    .withMessage('code must be 6 digits')
+    .isNumeric()
+    .withMessage('code must be numeric'),
+  body('password')
+    .isLength({ min: 6 })
+    .withMessage('Password must be at least 6 characters long')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      message: 'Validation failed',
+      errors: errors.array().map(e => ({ field: e.path || e.param, message: e.msg }))
+    });
+  }
+
+  const email = req.body.email.toLowerCase().trim();
+  const { code, password } = req.body;
+
+  const invalidOrExpired = (res) => res.status(400).json({
+    success: false,
+    message: 'Invalid or expired reset code'
+  });
+
+  try {
+    const user = await findUserByEmail(email).select('+resetCodeHash');
+
+    if (!user || !user.resetCodeHash || !user.resetCodeExpiresAt) {
+      return invalidOrExpired(res);
+    }
+
+    if (user.resetCodeExpiresAt < new Date()) {
+      user.resetCodeHash = null;
+      user.resetCodeExpiresAt = null;
+      user.resetCodeAttempts = 0;
+      await user.save();
+      return invalidOrExpired(res);
+    }
+
+    if (user.resetCodeAttempts >= RESET_CODE_MAX_ATTEMPTS) {
+      // Lockout: invalidate the code entirely rather than just keep refusing
+      // — a fresh /forgot-password call is required, which also resets the
+      // attempt counter, so a locked-out code can't be retried forever.
+      user.resetCodeHash = null;
+      user.resetCodeExpiresAt = null;
+      user.resetCodeAttempts = 0;
+      await user.save();
+      return invalidOrExpired(res);
+    }
+
+    const isMatch = await bcrypt.compare(code, user.resetCodeHash);
+    if (!isMatch) {
+      user.resetCodeAttempts += 1;
+      await user.save();
+      return invalidOrExpired(res);
+    }
+
+    // Success: set the new password (pre('save') hook hashes it), clear the
+    // reset code so it's single-use, and invalidate every existing session —
+    // a password reset is also how someone recovers from a stolen password,
+    // so every other device should be forced to log in again.
+    user.password = password;
+    user.resetCodeHash = null;
+    user.resetCodeExpiresAt = null;
+    user.resetCodeAttempts = 0;
+    await user.save();
+
+    await Session.deleteMany({ userId: user._id });
+
+    logger.info('✅ PASSWORD RESET SUCCESSFUL', { userId: user._id });
+
+    res.json({
+      success: true,
+      message: 'Password has been reset successfully. Please log in again.'
+    });
+  } catch (error) {
+    logger.error('❌ RESET PASSWORD ERROR', { error: error.message, stack: error.stack });
+    res.status(500).json({
+      success: false,
+      message: 'Server error resetting password'
     });
   }
 });

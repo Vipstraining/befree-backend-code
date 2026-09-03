@@ -45,9 +45,22 @@ const searchLimiter = rateLimit({
   handler: make429Handler(60 * 1000)
 });
 
+// Forgot-password rate limiter — deliberately stricter than the general auth
+// limiter. Abuse here means spamming a real inbox with reset codes, or
+// probing which emails have accounts by timing/behavior, not just noisy
+// login attempts.
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: parseInt(process.env.FORGOT_PASSWORD_RATE_LIMIT_MAX) || 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: make429Handler(15 * 60 * 1000)
+});
+
 module.exports = {
   apiLimiter,
   authLimiter,
   registerLimiter,
-  searchLimiter
+  searchLimiter,
+  forgotPasswordLimiter
 };
