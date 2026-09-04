@@ -2,6 +2,22 @@ const fs = require('fs');
 const path = require('path');
 const { getConfig } = require('./environments');
 
+// JSON.stringify throws on circular references — e.g. a Mongoose query's
+// options containing a transaction session, which circularly references the
+// MongoClient. That throw was surfacing as the *request's* error (e.g.
+// DELETE /account 500ing on a logging call, not on the deletion itself).
+// Replace circular refs instead of crashing.
+const safeStringify = (obj, indent) => {
+  const seen = new WeakSet();
+  return JSON.stringify(obj, (key, value) => {
+    if (typeof value === 'object' && value !== null) {
+      if (seen.has(value)) return '[Circular]';
+      seen.add(value);
+    }
+    return value;
+  }, indent);
+};
+
 // Ensure logs directory exists
 const ensureLogsDir = () => {
   const logsDir = path.join(__dirname, '..', 'logs');
@@ -48,12 +64,12 @@ const createLogger = () => {
     
     // Pretty print for detailed request/response logs
     if (typeof message === 'string' && (message.includes('REQUEST') || message.includes('RESPONSE'))) {
-      const metaStr = Object.keys(meta).length ? `\n${JSON.stringify(meta, null, 2)}` : '';
+      const metaStr = Object.keys(meta).length ? `\n${safeStringify(meta, 2)}` : '';
       return `[${timestamp}] [${level.toUpperCase()}] ${message}${metaStr}`;
     }
-    
+
     // Standard format for other logs
-    const metaStr = Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : '';
+    const metaStr = Object.keys(meta).length ? ` ${safeStringify(meta)}` : '';
     return `[${timestamp}] [${level.toUpperCase()}] ${message}${metaStr}`;
   };
   
