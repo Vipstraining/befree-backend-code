@@ -87,10 +87,25 @@ structure (`controllers/`, `utils/`) that don't exist in the current codebase.
   but were tracked historically — untracking does not remove them from git history.
   Whether history itself gets scrubbed (force-rewrite + everyone re-clones) is an
   open decision, not yet made.
-- AWS: the `Befree_code` IAM user is scoped to **SES send-only**
-  (`ses:SendEmail`/`ses:SendRawEmail`), restricted to the `befree.fit` and (temporarily,
-  for sandbox testing) `bigplutoai@gmail.com` identity ARNs — no S3, no other
-  service access. No IAM role is attached to the EC2 instance itself.
+- **AWS: `Befree_code`'s actual permissions are far broader than intended — this is
+  a live, unresolved security exposure, not just a doc correction.** Its own
+  attached policy is scoped correctly (`ses:SendEmail`/`ses:SendRawEmail`, restricted
+  to the `befree.fit` and, temporarily, `bigplutoai@gmail.com` identity ARNs) — but
+  the user is also a member of an IAM group called `s3Access` (predates this work,
+  created 2024-12-14) whose actual grant is **`AmazonEC2FullAccess` +
+  `IAMFullAccess` + `AmazonSQSFullAccess` + `AmazonS3FullAccess`** — four
+  full-account AWS-managed policies, not scoped S3 access to one bucket as the name
+  suggests. `IAMFullAccess` in particular means this credential can create/modify/
+  delete any IAM identity in the account, including granting itself broader access.
+  **This access key is deployed in the production `.env` on the EC2 box, for a
+  narrow SES-sending purpose** — the blast radius if that key ever leaks is the
+  entire AWS account, not "can send email." No IAM role is attached to the EC2
+  instance itself, so this key is also the only credential path the app has.
+  Verify with `aws iam list-groups-for-user --user-name Befree_code` before
+  trusting this description — group membership can change without the app's `.env`
+  changing. **Not yet remediated as of this doc** — needs a decision (remove from
+  the group and issue a separately-scoped credential for whatever the web deploy
+  actually needs, most likely) from whoever owns the AWS account.
 - Local dev machine's AWS CLI was found authenticated as the AWS account's **root
   user**, not a scoped IAM identity — a real risk, not yet remediated.
 
