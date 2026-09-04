@@ -742,12 +742,18 @@ router.delete('/account', auth, async (req, res) => {
       // here too, or this route will keep reporting success while silently
       // leaving that collection's data behind (a 5.1.1(v)/data-deletion
       // compliance regression, not just a bug).
-      [profiles, healthProfiles, searches] = await Promise.all([
-        UserProfile.deleteMany({ userId }, { session: dbSession }),
-        HealthProfile.deleteMany({ userId }, { session: dbSession }),
-        SearchHistory.deleteMany({ userId }, { session: dbSession })
-      ]);
-
+      //
+      // Sequential, not Promise.all: a single MongoDB ClientSession does not
+      // support concurrent operations — they race on the session's internal
+      // transaction/statement counter. Running these in parallel produced
+      // "transaction number N does not match any in-progress transactions"
+      // under real load; the driver's transient-error retry happened to
+      // recover it every time it was observed, but that's not a guarantee,
+      // and this route's entire purpose is deletion that's actually
+      // guaranteed, not "usually works."
+      profiles = await UserProfile.deleteMany({ userId }, { session: dbSession });
+      healthProfiles = await HealthProfile.deleteMany({ userId }, { session: dbSession });
+      searches = await SearchHistory.deleteMany({ userId }, { session: dbSession });
       user = await User.deleteOne({ _id: userId }, { session: dbSession });
       sessions = await Session.deleteMany({ userId }, { session: dbSession });
     });
