@@ -43,8 +43,8 @@ A comprehensive Node.js backend API for a food catalog application that provides
 - **Database**: MongoDB with Mongoose
 - **Authentication**: JWT (JSON Web Tokens), DB-backed sessions with rolling expiry
 - **AI Integration**: Claude API
-- **Email**: AWS SES (`@aws-sdk/client-ses`) — currently in sandbox mode, see
-  `docs/CURRENT_STATE.md`
+- **Email**: SMTP (via `nodemailer`) — currently pointed at privateemail.com
+  (Namecheap Private Email), but works with any SMTP provider
 - **Security**: Helmet, CORS, Rate Limiting
 - **Validation**: Express Validator
 - **Hosting**: AWS EC2, deployed manually via pm2 (no CI/CD)
@@ -120,13 +120,16 @@ in this repo may say.**
    NODE_ENV=development
    ```
    For forgot-password/reset-password to work, also set (see
-   `services/emailService.js`):
+   `services/emailService.js`, and `env.example` for the full list with
+   comments):
    ```env
-   AWS_REGION=us-east-1
-   SES_FROM_ADDRESS=noreply@befree.fit
-   # AWS credentials via IAM role or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
-   # Temporary, while SES is in sandbox mode — see docs/CURRENT_STATE.md:
-   SES_SANDBOX_TEST_RECIPIENT=
+   SMTP_HOST=mail.privateemail.com
+   SMTP_PORT=465
+   SMTP_SECURE=true
+   SMTP_USER=
+   SMTP_PASS=
+   SMTP_FROM_ADDRESS=noreply@befree.fit
+   SMTP_FROM_NAME=BeFree
    ```
    **Never commit `.env`.** It is gitignored, but was tracked historically in this
    repo — see the Security section of `docs/CURRENT_STATE.md`.
@@ -246,7 +249,7 @@ befree-backend-code/
 │   └── search.js
 ├── services/
 │   ├── claudeService.js
-│   └── emailService.js    # AWS SES
+│   └── emailService.js    # SMTP (nodemailer)
 ├── docs/
 │   └── CURRENT_STATE.md   # read this first — deployment status, known issues
 ├── logs/

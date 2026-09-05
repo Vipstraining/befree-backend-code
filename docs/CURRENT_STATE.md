@@ -1,10 +1,28 @@
 # Current State — read this first
 
-Last updated: 2026-09-04 (mid-session save — user's system was shutting down, this
-reflects an in-progress moment, not a clean stopping point). This doc exists so a
-fresh session (or a human) can pick up this project cold, without needing prior
-conversation history. If anything here looks stale, verify against the actual
-code/git/AWS before trusting it — this is a snapshot, not a live source of truth.
+Last updated: 2026-09-05. This doc exists so a fresh session (or a human) can pick
+up this project cold, without needing prior conversation history. If anything here
+looks stale, verify against the actual code/git/AWS before trusting it — this is a
+snapshot, not a live source of truth.
+
+**2026-09-05 update: email carrier switched from AWS SES to SMTP (via
+`nodemailer`)**, currently pointed at privateemail.com (Namecheap Private
+Email) (`services/emailService.js`; `@aws-sdk/client-ses` removed from
+`package.json`, `nodemailer` added). Config is generic SMTP host/port/user/
+pass, so it works with any provider — this went through a brief Mailgun
+detour first (HTTP API, then Mailgun SMTP) before settling on
+privateemail.com; no Mailgun-specific code remains. **Needs**:
+`SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS` set in prod `.env` on the EC2
+box (see `env.example`), then `pm2 restart befree-backend` — not yet confirmed
+done. `SMTP_USER`/`SMTP_PASS` are a mailbox's address and password on the
+privateemail.com account, not the Namecheap account login.
+
+One practical side effect worth acting on: the AWS access key described in
+"Security — outstanding items" below was, per that section, only in prod
+`.env` for SES sending — with SES no longer used at all, that credential is
+likely no longer needed by the app and could be removed from prod `.env`,
+closing that exposure rather than just narrowing it. Confirm nothing else
+depends on it before removing.
 
 ## Immediate next step for whoever resumes
 
@@ -43,14 +61,12 @@ structure (`controllers/`, `utils/`) that don't exist in the current codebase.
 - Search: barcode analysis (Open Food Facts + Claude AI), history, analytics,
   trending
 - **Forgot-password / reset-password** (`/api/auth/forgot-password`,
-  `/api/auth/reset-password`) — 6-digit emailed code via AWS SES, bcrypt-hashed,
-  20min expiry, 5-attempt lockout, full session invalidation on reset. **SES is
-  still in sandbox mode** — real users cannot receive this email yet; only
-  `bigplutoai@gmail.com` (verified for testing) can currently receive it, via a
-  documented override (`SES_SANDBOX_TEST_RECIPIENT` env var — see
-  `services/emailService.js`). Getting out of sandbox requires AWS production-access
-  approval, requested by the account owner via the SES console, not something a
-  session can do itself.
+  `/api/auth/reset-password`) — 6-digit emailed code, bcrypt-hashed, 20min
+  expiry, 5-attempt lockout, full session invalidation on reset. Email carrier
+  is now **SMTP via privateemail.com** (see the 2026-09-05 update above; was
+  AWS SES, briefly Mailgun). Not yet confirmed working end-to-end — needs
+  `SMTP_HOST`/`SMTP_USER`/`SMTP_PASS` set correctly (local and prod) and a
+  live send verified, then `pm2 restart` on prod.
 - CORS: confirmed working for `beta.befree.fit`; a previously-broken
   disallowed-origin case (500 instead of 403) is fixed.
 
