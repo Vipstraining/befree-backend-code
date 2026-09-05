@@ -518,9 +518,15 @@ router.post('/forgot-password', forgotPasswordLimiter, [
       user.resetCodeAttempts = 0;
       await user.save();
 
+      // logger.warn (not .info) so this reaches `pm2 logs` in production —
+      // config/logger.js only mirrors error/warn to console outside
+      // development, and this low-traffic security flow is worth being able
+      // to trace live without tailing logs/prod.log on the box.
+      logger.warn('🔐 PASSWORD RESET: sending code', { userId: user._id, email: user.email });
+
       try {
         await emailService.sendPasswordResetEmail(user.email, code);
-        logger.info('✅ PASSWORD RESET EMAIL SENT', { userId: user._id });
+        logger.warn('✅ PASSWORD RESET EMAIL SENT', { userId: user._id });
       } catch (emailError) {
         // Don't surface this to the client — same generic response either
         // way, so a send failure doesn't leak "this email exists" either.
@@ -530,7 +536,7 @@ router.post('/forgot-password', forgotPasswordLimiter, [
         });
       }
     } else {
-      logger.info('Password reset requested for unregistered email');
+      logger.warn('🔐 PASSWORD RESET: requested for unregistered email', { email });
     }
 
     res.json({

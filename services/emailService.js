@@ -15,13 +15,6 @@ const SMTP_PASS = process.env.SMTP_PASS;
 const FROM_ADDRESS = process.env.SMTP_FROM_ADDRESS || 'noreply@befree.fit';
 const FROM_NAME = process.env.SMTP_FROM_NAME || 'BeFree';
 
-// NOTE on Mailgun sandbox domains: if SMTP_USER is postmaster@sandboxXXXX
-// .mailgun.org, Mailgun still only delivers to addresses added as
-// "Authorized Recipients" for that domain in the dashboard — that
-// restriction is enforced by Mailgun regardless of API vs SMTP, and is not
-// something this code can work around. Add a real, DNS-verified domain to
-// send to arbitrary users.
-
 let transporter = null;
 function getTransporter() {
   if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
@@ -39,8 +32,19 @@ function getTransporter() {
 }
 
 async function sendPasswordResetEmail(toEmail, code) {
+  // logger.warn (not .info) so this reaches `pm2 logs` in production —
+  // config/logger.js only mirrors error/warn to console outside
+  // development. Never logs SMTP_PASS.
+  logger.warn('📧 SMTP: attempting send', {
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_SECURE,
+    user: SMTP_USER,
+    to: toEmail
+  });
+
   try {
-    await getTransporter().sendMail({
+    const info = await getTransporter().sendMail({
       from: `${FROM_NAME} <${FROM_ADDRESS}>`,
       to: toEmail,
       subject: 'Your BeFree password reset code',
@@ -51,8 +55,9 @@ async function sendPasswordResetEmail(toEmail, code) {
         `If you didn't request this, you can safely ignore this email — ` +
         `your password will not be changed.`
     });
+    logger.warn('📧 SMTP: send accepted', { to: toEmail, messageId: info.messageId, response: info.response });
   } catch (error) {
-    logger.error('SMTP send failed', {
+    logger.error('📧 SMTP: send failed', {
       code: error.code,
       responseCode: error.responseCode,
       response: error.response,
