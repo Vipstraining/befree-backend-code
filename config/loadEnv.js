@@ -21,10 +21,15 @@ const loadEnvironmentConfig = () => {
   // Debug: Log loaded environment variables
   console.log('🔍 Loaded environment variables:');
   console.log(`   NODE_ENV: ${process.env.NODE_ENV}`);
+  console.log(`   Actual file loaded: ${fs.existsSync(envFile) ? envFile : (fs.existsSync(defaultEnvFile) ? defaultEnvFile : 'NONE — using system env only')}`);
   console.log(`   JWT_SECRET: ${process.env.JWT_SECRET ? 'set' : 'not set'}`);
   console.log(`   CLAUDE_API_KEY: ${process.env.CLAUDE_API_KEY ? 'set' : 'not set'}`);
   console.log(`   MONGODB_URI: ${process.env.MONGODB_URI ? 'set' : 'not set'}`);
-  
+  console.log(`   SMTP_HOST: ${process.env.SMTP_HOST || 'not set'}`);
+  console.log(`   SMTP_PORT: ${process.env.SMTP_PORT || 'not set'}`);
+  console.log(`   SMTP_USER: ${process.env.SMTP_USER || 'not set'}`);
+  console.log(`   SMTP_PASS: ${process.env.SMTP_PASS ? `set (${process.env.SMTP_PASS.length} chars)` : 'not set'}`);
+
   return env;
 };
 
